@@ -1,0 +1,36 @@
+# =========================================================
+# Local Development Configuration Template
+# Copy this file to `application-local.yml` and adjust credentials as needed.
+# Do NOT commit production secrets to Git.
+# =========================================================
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/steg_db
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+logging:
+  level:
+    tn.steg.backend: DEBUG
+    org.springframework.security: DEBUG
+    org.flywaydb: INFO
+
+steg:
+  security:
+    jwt:
+      issuer: steg-platform
+      access-token-expiration-minutes: 15
+      refresh-token-expiration-days: 7
+      secret-key: 404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970
+  storage:
+    provider: local
+    local-root-path: ./storage/uploads
+  cors:
+    allowed-origins: http://localhost:3000,http://localhost:4200

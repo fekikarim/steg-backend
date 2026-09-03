@@ -1,0 +1,14 @@
+spring:
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+logging:
+  level:
+    tn.steg.backend: INFO
+    org.testcontainers: INFO
+    org.flywaydb: INFO
