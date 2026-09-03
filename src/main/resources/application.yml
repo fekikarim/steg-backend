@@ -57,7 +57,7 @@ steg:
       issuer: steg-platform
       access-token-expiration-minutes: ${JWT_ACCESS_EXP_MINUTES:15}
       refresh-token-expiration-days: ${JWT_REFRESH_EXP_DAYS:7}
-      secret-key: ${STEG_JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
+      secret-key: ${STEG_JWT_SECRET}
     lockout:
       max-failed-attempts: ${LOCKOUT_MAX_ATTEMPTS:5}
       duration-minutes: ${LOCKOUT_DURATION_MINUTES:30}
