@@ -3,6 +3,12 @@ spring:
     show-sql: false
     hibernate:
       ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 0
+        order_inserts: false
+        order_updates: false
   flyway:
     enabled: true
     baseline-on-migrate: true

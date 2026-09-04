@@ -36,12 +36,12 @@ class StegBackendApplicationTests {
     }
 
     @Test
-    @DisplayName("Flyway baseline migration V1__init.sql is applied cleanly")
+    @DisplayName("Flyway migrations V1 through V14 are applied cleanly")
     void flywayMigrationSucceeds() {
         assertThat(flyway).isNotNull();
         MigrationInfo current = flyway.info().current();
         assertThat(current).isNotNull();
-        assertThat(current.getVersion().getVersion()).isEqualTo("1");
-        assertThat(current.getDescription()).isEqualTo("init");
+        assertThat(current.getVersion().getVersion()).isEqualTo("14");
+        assertThat(current.getDescription()).isEqualTo("audit");
     }
 }

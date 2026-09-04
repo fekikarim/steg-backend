@@ -1,0 +1,10 @@
+package tn.steg.backend.ai.domain.model;
+
+public enum AiAnalysisType {
+    APPLICATION_DOCUMENT_ANALYSIS,
+    FINANCE_CASE_ANALYSIS,
+    LOGBOOK_GENERATION,
+    CANDIDATE_ASSISTANT_QUERY,
+    INTERNSHIP_ASSISTANT_QUERY,
+    TASK_ASSISTANCE
+}
