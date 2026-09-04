@@ -8,6 +8,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface UniversityRepository extends JpaRepository<University, UUID> {
+public interface UniversityRepository extends JpaRepository<University, UUID>, tn.steg.backend.candidate.domain.repository.UniversityRepository {
     Optional<University> findByCode(String code);
 }

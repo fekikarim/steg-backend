@@ -58,7 +58,8 @@ public class SecurityConfig {
                                 "/api/auth/register",
                                 "/api/auth/login",
                                 "/api/auth/refresh",
-                                "/api/public/**"
+                                "/api/public/**",
+                                "/api/universities"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )

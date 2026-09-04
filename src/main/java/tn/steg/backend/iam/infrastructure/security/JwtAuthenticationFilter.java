@@ -46,6 +46,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
+        // If an authentication is already present in SecurityContext (e.g. from tests or prior filter), proceed
+        if (SecurityContextHolder.getContext().getAuthentication() != null &&
+            SecurityContextHolder.getContext().getAuthentication().isAuthenticated()) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         String token = extractToken(request);
         if (token == null) {
             sendError(response, HttpServletResponse.SC_UNAUTHORIZED, "Authentication required.", path);
@@ -95,6 +102,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 || path.startsWith("/api/auth/login")
                 || path.startsWith("/api/auth/refresh")
                 || path.startsWith("/api/public/")
+                || path.startsWith("/api/universities")
                 || path.startsWith("/swagger-ui")
                 || path.startsWith("/v3/api-docs")
                 || path.startsWith("/actuator/health")
