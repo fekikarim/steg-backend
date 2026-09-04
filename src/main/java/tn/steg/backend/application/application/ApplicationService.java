@@ -2,12 +2,11 @@ package tn.steg.backend.application.application;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.access.AccessDeniedException;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tn.steg.backend.application.application.dto.ApplicationCreateRequest;
 import tn.steg.backend.application.application.dto.ApplicationResponse;
-import tn.steg.backend.application.application.dto.ApplicationReviewRequest;
 import tn.steg.backend.application.application.dto.ApplicationUpdateRequest;
 import tn.steg.backend.application.domain.model.ApplicationStatus;
 import tn.steg.backend.application.domain.model.InternshipApplication;
@@ -18,6 +17,7 @@ import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.organization.domain.repository.EmployeeRepository;
+import tn.steg.backend.workflow.application.WorkflowService;
 
 import java.time.LocalDate;
 import java.time.Year;
@@ -41,12 +41,25 @@ import java.util.UUID;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ApplicationService {
 
     private final InternshipApplicationRepository applicationRepository;
     private final CandidateRepository candidateRepository;
     private final EmployeeRepository employeeRepository;
+
+    /** Lazy to avoid circular dependency: WorkflowService → UserRepository → ApplicationService chain. */
+    @Lazy
+    private final WorkflowService workflowService;
+
+    public ApplicationService(InternshipApplicationRepository applicationRepository,
+                               CandidateRepository candidateRepository,
+                               EmployeeRepository employeeRepository,
+                               @Lazy WorkflowService workflowService) {
+        this.applicationRepository = applicationRepository;
+        this.candidateRepository   = candidateRepository;
+        this.employeeRepository    = employeeRepository;
+        this.workflowService       = workflowService;
+    }
 
     // -------------------------------------------------------------------------
     // Candidate-facing operations
@@ -132,6 +145,9 @@ public class ApplicationService {
      * Submits a DRAFT application (DRAFT → SUBMITTED).
      * Validates that all mandatory documents are attached before allowing submission.
      * (Document check is a no-op for now; Phase A6 will enforce it via ApplicationDocument records.)
+     * <p>
+     * Phase A5: also spawns an ApplicationWorkflowInstance so that all subsequent
+     * staff-driven transitions flow through the Workflow Engine.
      */
     @Transactional
     public ApplicationResponse submitApplication(UUID id, UserPrincipal actor) {
@@ -143,7 +159,11 @@ public class ApplicationService {
         application.setSubmissionDate(LocalDate.now());
 
         application = applicationRepository.save(application);
-        log.info("Application submitted: ref={}", application.getReference());
+
+        // Spawn the workflow instance — the engine now governs all future transitions
+        workflowService.spawnApplicationWorkflow(application);
+
+        log.info("Application submitted and workflow spawned: ref={}", application.getReference());
         return ApplicationResponse.from(application);
     }
 
@@ -172,57 +192,15 @@ public class ApplicationService {
     // -------------------------------------------------------------------------
     // Staff-facing operations
     // -------------------------------------------------------------------------
-
-    /**
-     * Staff-initiated status transitions (ADMIN / HR).
-     *
-     * Allowed transitions from service layer:
-     *   SUBMITTED → UNDER_REVIEW
-     *   UNDER_REVIEW → ACCEPTED | REJECTED | NEEDS_CORRECTION
-     */
-    @Transactional
-    public ApplicationResponse reviewApplication(UUID id, ApplicationReviewRequest request, UserPrincipal actor) {
-        InternshipApplication application = findApplicationOrThrow(id);
-        ApplicationStatus target = request.targetStatus();
-
-        switch (target) {
-            case UNDER_REVIEW -> {
-                validateTransition(application, ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW);
-                // Optionally assign the reviewer as the current employee
-                employeeRepository.findAll().stream()
-                        .filter(e -> e.getUser() != null && e.getUser().getId().equals(actor.getId()))
-                        .findFirst()
-                        .ifPresent(application::setReviewer);
-            }
-            case ACCEPTED -> {
-                validateTransition(application, ApplicationStatus.UNDER_REVIEW, ApplicationStatus.ACCEPTED);
-            }
-            case REJECTED -> {
-                validateTransition(application, ApplicationStatus.UNDER_REVIEW, ApplicationStatus.REJECTED);
-                if (request.rejectionReason() == null || request.rejectionReason().isBlank()) {
-                    throw new BusinessRuleException("REJECTION_REASON_REQUIRED",
-                            "A rejection reason must be provided when rejecting an application.");
-                }
-                application.setRejectionReason(request.rejectionReason());
-            }
-            case NEEDS_CORRECTION -> {
-                validateTransition(application, ApplicationStatus.UNDER_REVIEW, ApplicationStatus.NEEDS_CORRECTION);
-                if (request.correctionComment() == null || request.correctionComment().isBlank()) {
-                    throw new BusinessRuleException("CORRECTION_COMMENT_REQUIRED",
-                            "A correction comment must be provided.");
-                }
-                application.setCorrectionComment(request.correctionComment());
-            }
-            default -> throw new BusinessRuleException("INVALID_STAFF_TRANSITION",
-                    "Staff cannot directly set status to: " + target);
-        }
-
-        application.setStatus(target);
-        application = applicationRepository.save(application);
-        log.info("Application status changed to {} for ref={} by actor={}",
-                target, application.getReference(), actor.getId());
-        return ApplicationResponse.from(application);
-    }
+    //
+    // NOTE (Phase A5): direct status mutations by staff have been replaced by
+    // the Workflow Engine. Staff must now use:
+    //   POST /api/applications/{id}/workflow/actions
+    // with the appropriate WorkflowTransitionRequest body.
+    //
+    // The reviewApplication method has been removed. The WorkflowService
+    // (WorkflowTransitionGuard + WorkflowAction audit) now owns all
+    // SUBMITTED → UNDER_REVIEW → FINAL_DECISION transitions.
 
     /**
      * Candidate resubmits after corrections (NEEDS_CORRECTION → SUBMITTED).

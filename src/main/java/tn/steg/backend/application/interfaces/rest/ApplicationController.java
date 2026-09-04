@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.RestController;
 import tn.steg.backend.application.application.ApplicationService;
 import tn.steg.backend.application.application.dto.ApplicationCreateRequest;
 import tn.steg.backend.application.application.dto.ApplicationResponse;
-import tn.steg.backend.application.application.dto.ApplicationReviewRequest;
 import tn.steg.backend.application.application.dto.ApplicationUpdateRequest;
 import tn.steg.backend.common.domain.model.UserPrincipal;
 
@@ -119,15 +118,14 @@ public class ApplicationController {
     // -------------------------------------------------------------------------
     // State transitions — staff
     // -------------------------------------------------------------------------
-
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
-    @PostMapping("/{id}/review")
-    @Operation(summary = "Staff status transition",
-               description = "Allowed targets: UNDER_REVIEW (from SUBMITTED), ACCEPTED, REJECTED, NEEDS_CORRECTION (from UNDER_REVIEW).")
-    public ResponseEntity<ApplicationResponse> reviewApplication(
-            @PathVariable UUID id,
-            @Valid @RequestBody ApplicationReviewRequest request,
-            @AuthenticationPrincipal UserPrincipal principal) {
-        return ResponseEntity.ok(applicationService.reviewApplication(id, request, principal));
-    }
+    //
+    // Phase A5: Direct status mutation via this controller has been superseded by
+    // the Workflow Engine. Staff must use:
+    //   POST /api/applications/{id}/workflow/actions
+    // with a WorkflowTransitionRequest body.
+    //
+    // Steps:
+    //   SUBMITTED  → UNDER_REVIEW   : actionType=VALIDATION, targetStepCode=UNDER_REVIEW
+    //   UNDER_REVIEW → FINAL_DECISION : actionType=APPROVAL, targetStepCode=FINAL_DECISION,
+    //                                   decision=APPROVED|REJECTED|NEEDS_CORRECTION, comment=...
 }

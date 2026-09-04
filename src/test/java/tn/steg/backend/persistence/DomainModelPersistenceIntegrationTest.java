@@ -71,8 +71,8 @@ import tn.steg.backend.organization.infrastructure.persistence.DepartmentReposit
 import tn.steg.backend.organization.infrastructure.persistence.EmployeeRepository;
 import tn.steg.backend.workflow.domain.model.ApplicationWorkflowInstance;
 import tn.steg.backend.workflow.domain.model.WorkflowDefinition;
-import tn.steg.backend.workflow.infrastructure.persistence.WorkflowDefinitionRepository;
-import tn.steg.backend.workflow.infrastructure.persistence.WorkflowInstanceRepository;
+import tn.steg.backend.workflow.domain.repository.WorkflowDefinitionRepository;
+import tn.steg.backend.workflow.domain.repository.WorkflowInstanceRepository;
 
 import java.time.Instant;
 import java.time.LocalDate;

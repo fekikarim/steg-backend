@@ -4,5 +4,7 @@ public enum ApprovalDecision {
     PENDING,
     APPROVED,
     REJECTED,
-    RETURNED
+    RETURNED,
+    NEEDS_CORRECTION
 }
+

@@ -2,6 +2,7 @@ package tn.steg.backend.internship.application;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tn.steg.backend.application.domain.model.ApplicationStatus;
@@ -23,6 +24,7 @@ import tn.steg.backend.organization.domain.model.Department;
 import tn.steg.backend.organization.domain.model.Employee;
 import tn.steg.backend.organization.domain.repository.DepartmentRepository;
 import tn.steg.backend.organization.domain.repository.EmployeeRepository;
+import tn.steg.backend.workflow.application.WorkflowService;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -33,7 +35,6 @@ import java.util.UUID;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class InternshipService {
 
     private final InternshipRepository internshipRepository;
@@ -43,8 +44,28 @@ public class InternshipService {
     private final DepartmentRepository departmentRepository;
     private final EmployeeRepository employeeRepository;
 
+    /** Lazy injection to avoid circular dependency with WorkflowService. */
+    @Lazy
+    private final WorkflowService workflowService;
+
     private final InternshipClassificationService classificationService = new InternshipClassificationService();
     private final InternshipEligibilityService eligibilityService = new InternshipEligibilityService();
+
+    public InternshipService(InternshipRepository internshipRepository,
+                              InternshipAssignmentRepository assignmentRepository,
+                              InternshipApplicationRepository applicationRepository,
+                              CandidateRepository candidateRepository,
+                              DepartmentRepository departmentRepository,
+                              EmployeeRepository employeeRepository,
+                              @Lazy WorkflowService workflowService) {
+        this.internshipRepository  = internshipRepository;
+        this.assignmentRepository  = assignmentRepository;
+        this.applicationRepository = applicationRepository;
+        this.candidateRepository   = candidateRepository;
+        this.departmentRepository  = departmentRepository;
+        this.employeeRepository    = employeeRepository;
+        this.workflowService       = workflowService;
+    }
 
     // -------------------------------------------------------------------------
     // Creation
@@ -87,7 +108,10 @@ public class InternshipService {
         internship = internshipRepository.save(internship);
         log.info("Internship created from application: ref={}, candidate={}", reference, application.getCandidate().getId());
 
-        // Extension point: triggering InternshipWorkflowInstance in Phase A5
+        // Phase A5: spawn workflow instance so PLANNED → ACTIVE → COMPLETED transitions
+        // are governed by the Workflow Engine via POST /api/internships/{id}/workflow/actions
+        workflowService.spawnInternshipWorkflow(internship);
+
         return InternshipResponse.from(internship);
     }
 
@@ -121,6 +145,9 @@ public class InternshipService {
 
         internship = internshipRepository.save(internship);
         log.info("Internship created manually: ref={}, candidate={}", reference, candidate.getId());
+
+        // Phase A5: spawn workflow instance for manually created internships too
+        workflowService.spawnInternshipWorkflow(internship);
 
         return InternshipResponse.from(internship);
     }

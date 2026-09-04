@@ -8,6 +8,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface WorkflowDefinitionRepository extends JpaRepository<WorkflowDefinition, UUID> {
+public interface WorkflowDefinitionRepository extends JpaRepository<WorkflowDefinition, UUID>, tn.steg.backend.workflow.domain.repository.WorkflowDefinitionRepository {
     Optional<WorkflowDefinition> findByCode(String code);
 }
