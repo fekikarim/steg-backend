@@ -1,7 +1,5 @@
-package tn.steg.backend.internship.infrastructure.persistence;
+package tn.steg.backend.internship.domain.repository;
 
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
 import tn.steg.backend.internship.domain.model.AssignmentStatus;
 import tn.steg.backend.internship.domain.model.InternshipAssignment;
 
@@ -9,8 +7,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-@Repository
-public interface InternshipAssignmentRepository extends JpaRepository<InternshipAssignment, UUID>, tn.steg.backend.internship.domain.repository.InternshipAssignmentRepository {
+public interface InternshipAssignmentRepository {
     List<InternshipAssignment> findByInternshipId(UUID internshipId);
     Optional<InternshipAssignment> findByInternshipIdAndStatus(UUID internshipId, AssignmentStatus status);
+    InternshipAssignment save(InternshipAssignment assignment);
+    InternshipAssignment saveAndFlush(InternshipAssignment assignment);
 }
