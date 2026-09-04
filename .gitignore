@@ -64,3 +64,6 @@ replay_pid*
 # Local overrides #
 application-local.yml
 application-local.properties
+
+# Storage files #
+uploads/
