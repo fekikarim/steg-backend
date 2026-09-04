@@ -23,7 +23,7 @@ public class RegisterRequest {
 
     @NotBlank(message = "Password is required")
     @Size(min = 8, max = 128, message = "Password must be between 8 and 128 characters")
-    @Schema(description = "Password (min 8 characters)", example = "SecureP@ss123")
+    @Schema(description = "Password (min 8 characters)", example = "********")
     private String password;
 
     @NotBlank(message = "First name is required")

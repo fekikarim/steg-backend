@@ -46,8 +46,9 @@ class AuthIntegrationTest {
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
 
-    @Autowired
-    private JwtService jwtService;
+    private static final String TEST_PASSWORD = "test-password-123";
+    private static final String WRONG_PASSWORD = "wrong-password-999";
+    private static final String OTHER_PASSWORD = "other-password-456";
 
     private MockMvc mockMvc;
     private RegisterRequest registerRequest;
@@ -62,7 +63,7 @@ class AuthIntegrationTest {
 
         registerRequest = RegisterRequest.builder()
                 .email("candidate@test.tn")
-                .password("SecureP@ss123")
+                .password(TEST_PASSWORD)
                 .firstName("Ahmed")
                 .lastName("Ben Ali")
                 .phone("+216 71 123 456")
@@ -70,7 +71,7 @@ class AuthIntegrationTest {
 
         loginRequest = LoginRequest.builder()
                 .email("candidate@test.tn")
-                .password("SecureP@ss123")
+                .password(TEST_PASSWORD)
                 .build();
     }
 
@@ -111,7 +112,7 @@ class AuthIntegrationTest {
         void registerInvalidEmail() throws Exception {
             RegisterRequest invalid = RegisterRequest.builder()
                     .email("not-an-email")
-                    .password("SecureP@ss123")
+                    .password(TEST_PASSWORD)
                     .firstName("Test")
                     .lastName("User")
                     .build();
@@ -127,7 +128,7 @@ class AuthIntegrationTest {
         void registerShortPassword() throws Exception {
             RegisterRequest invalid = RegisterRequest.builder()
                     .email("test@test.tn")
-                    .password("short")
+                    .password("short1")
                     .firstName("Test")
                     .lastName("User")
                     .build();
@@ -169,7 +170,7 @@ class AuthIntegrationTest {
 
             LoginRequest wrongPassword = LoginRequest.builder()
                     .email("candidate@test.tn")
-                    .password("WrongPassword123!")
+                    .password(WRONG_PASSWORD)
                     .build();
 
             mockMvc.perform(post("/api/auth/login")
@@ -184,7 +185,7 @@ class AuthIntegrationTest {
         void loginNonExistentEmail() throws Exception {
             LoginRequest nonExistent = LoginRequest.builder()
                     .email("nobody@test.tn")
-                    .password("AnyPassword123!")
+                    .password(OTHER_PASSWORD)
                     .build();
 
             mockMvc.perform(post("/api/auth/login")
@@ -296,7 +297,7 @@ class AuthIntegrationTest {
 
             LoginRequest wrongPassword = LoginRequest.builder()
                     .email("candidate@test.tn")
-                    .password("WrongPassword123!")
+                    .password(WRONG_PASSWORD)
                     .build();
 
             for (int i = 0; i < 5; i++) {
@@ -308,7 +309,7 @@ class AuthIntegrationTest {
 
             LoginRequest correctPassword = LoginRequest.builder()
                     .email("candidate@test.tn")
-                    .password("SecureP@ss123")
+                    .password(TEST_PASSWORD)
                     .build();
 
             mockMvc.perform(post("/api/auth/login")
