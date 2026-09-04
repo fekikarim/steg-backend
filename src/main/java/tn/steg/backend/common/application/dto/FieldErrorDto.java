@@ -1,4 +1,4 @@
-package tn.steg.backend.common.interfaces.dto;
+package tn.steg.backend.common.application.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;

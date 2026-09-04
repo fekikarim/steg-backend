@@ -1,4 +1,4 @@
-package tn.steg.backend.common.interfaces.dto;
+package tn.steg.backend.common.application.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -12,7 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Standard consistent error envelope across all REST APIs.
+ * Standard consistent error envelope across all REST APIs and security filters.
  */
 @Data
 @Builder

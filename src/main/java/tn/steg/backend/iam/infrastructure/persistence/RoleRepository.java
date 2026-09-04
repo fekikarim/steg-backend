@@ -4,10 +4,11 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 import tn.steg.backend.iam.domain.model.Role;
 
-import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Spring Data JPA adapter for the domain {@link tn.steg.backend.iam.domain.repository.RoleRepository} port.
+ */
 @Repository
-public interface RoleRepository extends JpaRepository<Role, UUID> {
-    Optional<Role> findByCode(String code);
+public interface RoleRepository extends JpaRepository<Role, UUID>, tn.steg.backend.iam.domain.repository.RoleRepository {
 }

@@ -15,8 +15,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
-import tn.steg.backend.common.interfaces.dto.ErrorEnvelope;
-import tn.steg.backend.common.interfaces.dto.FieldErrorDto;
+import tn.steg.backend.common.application.dto.ErrorEnvelope;
+import tn.steg.backend.common.application.dto.FieldErrorDto;
 
 import java.time.Instant;
 import java.util.ArrayList;
