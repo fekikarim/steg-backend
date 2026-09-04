@@ -8,6 +8,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface FileAssetRepository extends JpaRepository<FileAsset, UUID> {
+public interface FileAssetRepository extends JpaRepository<FileAsset, UUID>, tn.steg.backend.document.domain.repository.FileAssetRepository {
     Optional<FileAsset> findByChecksum(String checksum);
 }

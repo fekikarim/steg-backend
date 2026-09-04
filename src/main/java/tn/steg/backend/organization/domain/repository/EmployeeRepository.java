@@ -9,6 +9,7 @@ import java.util.UUID;
 public interface EmployeeRepository {
     List<Employee> findAll();
     Optional<Employee> findById(UUID id);
+    Optional<Employee> findByUserId(UUID userId);
     Optional<Employee> findByEmployeeNumber(String employeeNumber);
     Employee save(Employee employee);
 }

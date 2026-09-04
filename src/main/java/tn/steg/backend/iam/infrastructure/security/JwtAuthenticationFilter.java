@@ -67,7 +67,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             List<String> roles = claims.get("roles", List.class);
 
             List<SimpleGrantedAuthority> authorities = roles.stream()
-                    .map(role -> new SimpleGrantedAuthority(role.startsWith("ROLE_") ? role : "ROLE_" + role))
+                    .map(item -> {
+                        // If it starts with ROLE_ or is a permission (e.g. DOCUMENT_VIEW_RESTRICTED), keep or format appropriately
+                        if (item.startsWith("ROLE_")) {
+                            return new SimpleGrantedAuthority(item);
+                        } else if (item.equals("ADMIN") || item.equals("HR") || item.equals("CANDIDATE")
+                                || item.equals("SUPERVISOR") || item.equals("FINANCE") || item.equals("DIRECTOR")
+                                || item.equals("INTERN")) {
+                            return new SimpleGrantedAuthority("ROLE_" + item);
+                        } else {
+                            // Permission or custom authority
+                            return new SimpleGrantedAuthority(item);
+                        }
+                    })
                     .toList();
 
             UserPrincipal principal = new UserPrincipal(userId, email, roles);

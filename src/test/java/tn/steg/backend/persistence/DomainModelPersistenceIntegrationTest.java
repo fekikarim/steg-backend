@@ -39,7 +39,7 @@ import tn.steg.backend.document.domain.model.Document;
 import tn.steg.backend.document.domain.model.DocumentType;
 import tn.steg.backend.document.domain.model.FileAsset;
 import tn.steg.backend.document.infrastructure.persistence.DocumentRepository;
-import tn.steg.backend.document.infrastructure.persistence.FileAssetRepository;
+import tn.steg.backend.document.domain.repository.FileAssetRepository;
 import tn.steg.backend.evaluation.domain.model.Evaluation;
 import tn.steg.backend.evaluation.domain.model.EvaluationType;
 import tn.steg.backend.evaluation.infrastructure.persistence.EvaluationRepository;
