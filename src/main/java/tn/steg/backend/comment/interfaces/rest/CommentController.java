@@ -19,7 +19,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
-@Tag(name = "Comments", description = "Endpoints for Journal Entry and Deliverable comments")
+@Tag(name = "Comments", description = "Endpoints for Journal Entry, Deliverable, and Evaluation comments")
 public class CommentController {
 
     private final CommentService commentService;
@@ -70,5 +70,29 @@ public class CommentController {
             @PathVariable UUID deliverableId,
             @AuthenticationPrincipal UserPrincipal actor) {
         return ResponseEntity.ok(commentService.getDeliverableComments(deliverableId, actor));
+    }
+
+    // -------------------------------------------------------------------------
+    // Evaluation Comments
+    // -------------------------------------------------------------------------
+
+    @PostMapping("/evaluations/{evaluationId}/comments")
+    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#evaluationId)")
+    @Operation(summary = "Add comment to an evaluation")
+    public ResponseEntity<CommentResponse> addEvaluationComment(
+            @PathVariable UUID evaluationId,
+            @RequestBody CommentRequest request,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(commentService.addEvaluationComment(evaluationId, request, actor));
+    }
+
+    @GetMapping("/evaluations/{evaluationId}/comments")
+    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#evaluationId)")
+    @Operation(summary = "List comments for an evaluation")
+    public ResponseEntity<List<CommentResponse>> getEvaluationComments(
+            @PathVariable UUID evaluationId,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(commentService.getEvaluationComments(evaluationId, actor));
     }
 }

@@ -12,6 +12,8 @@ import tn.steg.backend.companion.domain.model.Task;
 import tn.steg.backend.companion.domain.repository.DeliverableRepository;
 import tn.steg.backend.companion.domain.repository.JournalEntryRepository;
 import tn.steg.backend.companion.domain.repository.TaskRepository;
+import tn.steg.backend.evaluation.domain.model.Evaluation;
+import tn.steg.backend.evaluation.domain.repository.EvaluationDomainRepository;
 import tn.steg.backend.internship.domain.model.AssignmentStatus;
 import tn.steg.backend.internship.domain.model.Internship;
 import tn.steg.backend.internship.domain.model.InternshipAssignment;
@@ -42,6 +44,7 @@ public class AuthzService {
     private final TaskRepository taskRepository;
     private final JournalEntryRepository journalEntryRepository;
     private final DeliverableRepository deliverableRepository;
+    private final EvaluationDomainRepository evaluationRepository;
 
     public boolean isAuthenticated() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -185,6 +188,12 @@ public class AuthzService {
         if (journalEntry.isPresent() && journalEntry.get().getJournal() != null
                 && journalEntry.get().getJournal().getInternship() != null) {
             return journalEntry.get().getJournal().getInternship().getId();
+        }
+
+        // Check if Evaluation ID
+        Optional<Evaluation> evaluation = evaluationRepository.findById(targetId);
+        if (evaluation.isPresent() && evaluation.get().getInternship() != null) {
+            return evaluation.get().getInternship().getId();
         }
 
         return null;

@@ -15,6 +15,8 @@ import tn.steg.backend.companion.domain.model.Deliverable;
 import tn.steg.backend.companion.domain.model.JournalEntry;
 import tn.steg.backend.companion.domain.repository.DeliverableRepository;
 import tn.steg.backend.companion.domain.repository.JournalEntryRepository;
+import tn.steg.backend.evaluation.domain.model.Evaluation;
+import tn.steg.backend.evaluation.domain.repository.EvaluationDomainRepository;
 import tn.steg.backend.iam.domain.model.User;
 import tn.steg.backend.iam.domain.repository.UserRepository;
 import tn.steg.backend.internship.domain.model.AssignmentStatus;
@@ -34,6 +36,7 @@ public class CommentService {
     private final CommentRepository commentRepository;
     private final JournalEntryRepository journalEntryRepository;
     private final DeliverableRepository deliverableRepository;
+    private final EvaluationDomainRepository evaluationRepository;
     private final UserRepository userRepository;
     private final InternshipAssignmentRepository assignmentRepository;
 
@@ -109,6 +112,44 @@ public class CommentService {
         validateParticipant(deliverable.getInternship(), actor);
 
         return commentRepository.findByDeliverableIdOrderByCreatedAtAsc(deliverableId).stream()
+                .map(CommentResponse::from)
+                .toList();
+    }
+
+    // -------------------------------------------------------------------------
+    // Evaluation Comments
+    // -------------------------------------------------------------------------
+
+    @Transactional
+    public CommentResponse addEvaluationComment(UUID evaluationId, CommentRequest request, UserPrincipal actor) {
+        if (request.content() == null || request.content().isBlank()) {
+            throw new BusinessRuleException("EMPTY_COMMENT", "Comment content cannot be blank.");
+        }
+
+        Evaluation evaluation = evaluationRepository.findById(evaluationId)
+                .orElseThrow(() -> new ResourceNotFoundException("Evaluation not found: " + evaluationId));
+
+        validateParticipant(evaluation.getInternship(), actor);
+
+        User author = userRepository.findById(actor.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("User not found: " + actor.getId()));
+
+        Comment comment = new Comment(request.content(), author);
+        comment.setEvaluation(evaluation);
+        comment = commentRepository.save(comment);
+
+        log.info("Comment {} added to Evaluation {} by User {}", comment.getId(), evaluationId, actor.getId());
+        return CommentResponse.from(comment);
+    }
+
+    @Transactional(readOnly = true)
+    public List<CommentResponse> getEvaluationComments(UUID evaluationId, UserPrincipal actor) {
+        Evaluation evaluation = evaluationRepository.findById(evaluationId)
+                .orElseThrow(() -> new ResourceNotFoundException("Evaluation not found: " + evaluationId));
+
+        validateParticipant(evaluation.getInternship(), actor);
+
+        return commentRepository.findByEvaluationIdOrderByCreatedAtAsc(evaluationId).stream()
                 .map(CommentResponse::from)
                 .toList();
     }
