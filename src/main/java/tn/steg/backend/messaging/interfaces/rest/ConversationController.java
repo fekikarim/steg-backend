@@ -2,15 +2,20 @@ package tn.steg.backend.messaging.interfaces.rest;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.InputStreamResource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -28,6 +33,7 @@ import tn.steg.backend.messaging.application.MessagingService;
 import tn.steg.backend.messaging.application.dto.AddMemberRequest;
 import tn.steg.backend.messaging.application.dto.ConversationResponse;
 import tn.steg.backend.messaging.application.dto.CreateGroupRequest;
+import tn.steg.backend.messaging.application.dto.MarkDeliveredRequest;
 import tn.steg.backend.messaging.application.dto.MarkReadRequest;
 import tn.steg.backend.messaging.application.dto.MessageResponse;
 import tn.steg.backend.messaging.application.dto.SendMessageRequest;
@@ -40,14 +46,22 @@ import java.util.UUID;
  * REST fallback/history adapter for messaging (Phase A9).
  * Real-time delivery uses STOMP (see {@code MessagingStompController});
  * every endpoint here enforces the same active-membership rule server-side.
+ *
+ * <p>Every mutation (send, edit, delete, delivered ack, read ack) is also
+ * broadcast to {@code /topic/conversations/{id}} so WebSocket subscribers
+ * stay in sync regardless of which transport originated the change.
+ * Broadcasts are best-effort: a broker failure never fails the REST call
+ * itself (the persisted state remains authoritative).
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/conversations")
 @RequiredArgsConstructor
-@Tag(name = "Messaging", description = "Conversations, messages, read receipts (REST fallback to the STOMP real-time channel)")
+@Tag(name = "Messaging", description = "Conversations, messages, delivery/read receipts, attachments (REST fallback to the STOMP real-time channel)")
 public class ConversationController {
 
     private final MessagingService messagingService;
+    private final SimpMessagingTemplate messagingTemplate;
 
     @GetMapping
     @PreAuthorize("isAuthenticated()")
@@ -96,7 +110,7 @@ public class ConversationController {
 
     @GetMapping("/{conversationId}/messages")
     @PreAuthorize("@authz.isOwnConversation(#conversationId)")
-    @Operation(summary = "Paginated history ordered by sequenceNumber (cursor-based)")
+    @Operation(summary = "Paginated history ordered by sequenceNumber (cursor-based; fetching acks delivery)")
     public ResponseEntity<Page<MessageResponse>> history(
             @PathVariable UUID conversationId,
             @RequestParam(required = false) Long cursor,
@@ -112,20 +126,22 @@ public class ConversationController {
             @PathVariable UUID conversationId,
             @Valid @RequestBody SendMessageRequest request,
             @AuthenticationPrincipal UserPrincipal actor) {
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(messagingService.sendMessage(conversationId, request.content(), actor));
+        MessageResponse saved = messagingService.sendMessage(conversationId, request.content(), actor);
+        broadcast(conversationId, saved);
+        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 
     @PostMapping(value = "/{conversationId}/messages/with-attachment", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("@authz.isOwnConversation(#conversationId)")
-    @Operation(summary = "Send a message with a file attachment (Phase A6 validation reused)")
+    @Operation(summary = "Send a message with a file attachment (PDF/JPEG/PNG, max 10 MB, malware hook)")
     public ResponseEntity<MessageResponse> sendWithAttachment(
             @PathVariable UUID conversationId,
             @RequestParam("content") String content,
             @RequestParam(value = "file", required = false) MultipartFile file,
             @AuthenticationPrincipal UserPrincipal actor) {
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(messagingService.sendMessageWithAttachment(conversationId, content, file, actor));
+        MessageResponse saved = messagingService.sendMessageWithAttachment(conversationId, content, file, actor);
+        broadcast(conversationId, saved);
+        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 
     @PatchMapping("/messages/{messageId}")
@@ -135,7 +151,9 @@ public class ConversationController {
             @PathVariable UUID messageId,
             @Valid @RequestBody SendMessageRequest request,
             @AuthenticationPrincipal UserPrincipal actor) {
-        return ResponseEntity.ok(messagingService.editMessage(messageId, request.content(), actor));
+        MessageResponse updated = messagingService.editMessage(messageId, request.content(), actor);
+        broadcast(updated.conversationId(), updated);
+        return ResponseEntity.ok(updated);
     }
 
     @DeleteMapping("/messages/{messageId}")
@@ -144,25 +162,85 @@ public class ConversationController {
     public ResponseEntity<Void> delete(
             @PathVariable UUID messageId,
             @AuthenticationPrincipal UserPrincipal actor) {
-        messagingService.deleteMessage(messageId, actor);
+        MessageResponse redacted = messagingService.deleteMessage(messageId, actor);
+        broadcast(redacted.conversationId(), redacted);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{conversationId}/delivered")
+    @PreAuthorize("@authz.isOwnConversation(#conversationId)")
+    @Operation(summary = "Acknowledge delivery up to a sequenceNumber (SENT → DELIVERED)")
+    public ResponseEntity<List<MessageResponse>> markDelivered(
+            @PathVariable UUID conversationId,
+            @Valid @RequestBody MarkDeliveredRequest request,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        List<MessageResponse> changed =
+                messagingService.markDelivered(conversationId, request.upToSequenceNumber(), actor);
+        broadcastAll(conversationId, changed);
+        return ResponseEntity.ok(changed);
     }
 
     @PostMapping("/{conversationId}/read")
     @PreAuthorize("@authz.isOwnConversation(#conversationId)")
-    @Operation(summary = "Mark read up to a sequenceNumber (updates lastReadAt)")
+    @Operation(summary = "Mark read up to a sequenceNumber (sequence watermark; advances delivery too)")
     public ResponseEntity<Void> markRead(
             @PathVariable UUID conversationId,
             @Valid @RequestBody MarkReadRequest request,
             @AuthenticationPrincipal UserPrincipal actor) {
-        messagingService.markRead(conversationId, request.upToSequenceNumber(), actor);
+        List<MessageResponse> changed =
+                messagingService.markRead(conversationId, request.upToSequenceNumber(), actor);
+        broadcastAll(conversationId, changed);
         return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/unread/counts")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "Unread-count aggregation per conversation for the current user")
+    @Operation(summary = "Unread-count aggregation per conversation for the current user (sequence-based, own messages excluded)")
     public ResponseEntity<List<UnreadCountResponse>> unreadCounts(@AuthenticationPrincipal UserPrincipal actor) {
         return ResponseEntity.ok(messagingService.getUnreadCounts(actor));
+    }
+
+    @GetMapping("/messages/{messageId}/attachments")
+    @PreAuthorize("isAuthenticated()")
+    @Operation(summary = "List attachments of a message (members only; hidden once deleted)")
+    public ResponseEntity<List<MessageResponse.AttachmentResponse>> listAttachments(
+            @PathVariable UUID messageId,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(messagingService.listAttachments(messageId, actor));
+    }
+
+    @GetMapping("/attachments/{attachmentId}/download")
+    @PreAuthorize("isAuthenticated()")
+    @Operation(summary = "Download a message attachment (members only, audited, streamed)")
+    public ResponseEntity<InputStreamResource> downloadAttachment(
+            @PathVariable UUID attachmentId,
+            @AuthenticationPrincipal UserPrincipal actor,
+            HttpServletRequest request) {
+        MessagingService.AttachmentDownload download =
+                messagingService.downloadAttachment(attachmentId, actor, request.getRemoteAddr());
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(download.mimeType()))
+                .contentLength(download.size())
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + download.fileName() + "\"")
+                .body(new InputStreamResource(download.inputStream()));
+    }
+
+    private void broadcast(UUID conversationId, MessageResponse message) {
+        try {
+            messagingTemplate.convertAndSend("/topic/conversations/" + conversationId, message);
+        } catch (Exception e) {
+            // Best-effort: persistence is authoritative; a broker hiccup must
+            // never fail the REST call. Clients converge via history fetch.
+            log.warn("WS broadcast failed for conv {}: {}", conversationId, e.getMessage());
+        }
+    }
+
+    private void broadcastAll(UUID conversationId, List<MessageResponse> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return;
+        }
+        for (MessageResponse message : messages) {
+            broadcast(conversationId, message);
+        }
     }
 }

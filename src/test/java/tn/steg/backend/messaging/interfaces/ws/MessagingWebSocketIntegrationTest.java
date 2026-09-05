@@ -98,6 +98,8 @@ class MessagingWebSocketIntegrationTest {
     @Autowired
     private JwtService jwtService;
 
+    private final java.net.http.HttpClient httpClient = java.net.http.HttpClient.newHttpClient();
+
     private User internUser;
     private User supervisorUser;
     private String internToken;
@@ -192,6 +194,110 @@ class MessagingWebSocketIntegrationTest {
         assertThat(receivedBySupervisor.get("content").asText()).isEqualTo("hello over websocket");
         assertThat(receivedBySupervisor.get("sequenceNumber").asLong()).isEqualTo(1L);
         assertThat(receivedBySupervisor.get("status").asText()).isEqualTo("SENT");
+    }
+
+    @Test
+    @DisplayName("STOMP delivered/read acks broadcast status updates to both members")
+    void stompAckBroadcastsStatusUpdates() throws Exception {
+        BlockingQueue<JsonNode> internInbox = new ArrayBlockingQueue<>(20);
+        BlockingQueue<JsonNode> supervisorInbox = new ArrayBlockingQueue<>(20);
+
+        StompSession internSession = connect(stompClient(), internToken);
+        StompSession supervisorSession = connect(stompClient(), supervisorToken);
+        sessions.add(internSession);
+        sessions.add(supervisorSession);
+
+        internSession.subscribe("/topic/conversations/" + conversationId, frame(internInbox));
+        supervisorSession.subscribe("/topic/conversations/" + conversationId, frame(supervisorInbox));
+        Thread.sleep(500);
+
+        // 1. Intern sends → both receive SENT
+        StompHeaders sendHeaders = new StompHeaders();
+        sendHeaders.setDestination("/app/conversations/" + conversationId + "/send");
+        internSession.send(sendHeaders, java.util.Map.of("content", "ack lifecycle"));
+        assertThat(internInbox.poll(10, TimeUnit.SECONDS).get("status").asText()).isEqualTo("SENT");
+        assertThat(supervisorInbox.poll(10, TimeUnit.SECONDS).get("status").asText()).isEqualTo("SENT");
+
+        // 2. Supervisor acks delivery over STOMP → both receive DELIVERED
+        StompHeaders deliveredHeaders = new StompHeaders();
+        deliveredHeaders.setDestination("/app/conversations/" + conversationId + "/delivered");
+        supervisorSession.send(deliveredHeaders, java.util.Map.of("upToSequenceNumber", 1));
+        JsonNode deliveredToIntern = internInbox.poll(10, TimeUnit.SECONDS);
+        JsonNode deliveredToSupervisor = supervisorInbox.poll(10, TimeUnit.SECONDS);
+        assertThat(deliveredToIntern).isNotNull();
+        assertThat(deliveredToSupervisor).isNotNull();
+        assertThat(deliveredToIntern.get("status").asText()).isEqualTo("DELIVERED");
+        assertThat(deliveredToSupervisor.get("status").asText()).isEqualTo("DELIVERED");
+
+        // 3. Supervisor acks read over STOMP → both receive READ
+        StompHeaders readHeaders = new StompHeaders();
+        readHeaders.setDestination("/app/conversations/" + conversationId + "/read");
+        supervisorSession.send(readHeaders, java.util.Map.of("upToSequenceNumber", 1));
+        JsonNode readByIntern = internInbox.poll(10, TimeUnit.SECONDS);
+        JsonNode readBySupervisor = supervisorInbox.poll(10, TimeUnit.SECONDS);
+        assertThat(readByIntern).isNotNull();
+        assertThat(readBySupervisor).isNotNull();
+        assertThat(readByIntern.get("status").asText()).isEqualTo("READ");
+        assertThat(readBySupervisor.get("status").asText()).isEqualTo("READ");
+    }
+
+    @Test
+    @DisplayName("REST mutations broadcast to WebSocket subscribers (sender sees live status)")
+    void restMutationsBroadcastToWsSubscribers() throws Exception {
+        BlockingQueue<JsonNode> supervisorInbox = new ArrayBlockingQueue<>(20);
+        StompSession supervisorSession = connect(stompClient(), supervisorToken);
+        sessions.add(supervisorSession);
+        supervisorSession.subscribe("/topic/conversations/" + conversationId, frame(supervisorInbox));
+        Thread.sleep(500);
+
+        // REST send → WS subscriber receives the SENT broadcast
+        assertThat(restPost("/api/conversations/" + conversationId + "/messages",
+                "{\"content\":\"rest to ws\"}", internToken)).isEqualTo(201);
+        JsonNode broadcastSent = supervisorInbox.poll(10, TimeUnit.SECONDS);
+        assertThat(broadcastSent).isNotNull();
+        assertThat(broadcastSent.get("content").asText()).isEqualTo("rest to ws");
+        assertThat(broadcastSent.get("status").asText()).isEqualTo("SENT");
+        UUID messageId = UUID.fromString(broadcastSent.get("id").asText());
+
+        // REST edit → WS subscriber receives the EDITED broadcast
+        assertThat(restPatch("/api/conversations/messages/" + messageId,
+                "{\"content\":\"rest to ws (edited)\"}", internToken)).isEqualTo(200);
+        JsonNode broadcastEdited = supervisorInbox.poll(10, TimeUnit.SECONDS);
+        assertThat(broadcastEdited).isNotNull();
+        assertThat(broadcastEdited.get("status").asText()).isEqualTo("EDITED");
+        assertThat(broadcastEdited.get("content").asText()).isEqualTo("rest to ws (edited)");
+
+        // A fresh unedited message follows the full SENT → READ path live:
+        // (the edited message above is terminal EDITED, so no READ broadcast
+        // is emitted for it — terminal states are stable by design).
+        assertThat(restPost("/api/conversations/" + conversationId + "/messages",
+                "{\"content\":\"second\"}", internToken)).isEqualTo(201);
+        assertThat(supervisorInbox.poll(10, TimeUnit.SECONDS).get("status").asText()).isEqualTo("SENT");
+        assertThat(restPost("/api/conversations/" + conversationId + "/read",
+                "{\"upToSequenceNumber\":2}", supervisorToken)).isEqualTo(204);
+        JsonNode readBroadcast = supervisorInbox.poll(10, TimeUnit.SECONDS);
+        assertThat(readBroadcast).isNotNull();
+        assertThat(readBroadcast.get("status").asText()).isIn("DELIVERED", "READ");
+    }
+
+    private int restPost(String path, String json, String bearer) throws Exception {
+        java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create("http://localhost:" + port + path))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + bearer)
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(json))
+                .build();
+        return httpClient.send(request, java.net.http.HttpResponse.BodyHandlers.discarding()).statusCode();
+    }
+
+    private int restPatch(String path, String json, String bearer) throws Exception {
+        java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create("http://localhost:" + port + path))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + bearer)
+                .method("PATCH", java.net.http.HttpRequest.BodyPublishers.ofString(json))
+                .build();
+        return httpClient.send(request, java.net.http.HttpResponse.BodyHandlers.discarding()).statusCode();
     }
 
     @SuppressWarnings("deprecation")

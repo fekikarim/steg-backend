@@ -35,6 +35,8 @@ import tn.steg.backend.internship.infrastructure.persistence.InternshipRepositor
 import tn.steg.backend.messaging.application.MessagingService;
 import tn.steg.backend.messaging.application.dto.CreateGroupRequest;
 import tn.steg.backend.messaging.application.dto.SendMessageRequest;
+import tn.steg.backend.document.domain.repository.FileAssetRepository;
+import tn.steg.backend.internship.domain.model.InternshipStatus;
 import tn.steg.backend.organization.domain.model.Department;
 import tn.steg.backend.organization.domain.model.Employee;
 import tn.steg.backend.organization.infrastructure.persistence.DepartmentRepository;
@@ -51,6 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -92,6 +95,9 @@ class MessagingIntegrationTest {
 
     @Autowired
     private MessagingService messagingService;
+
+    @Autowired
+    private FileAssetRepository fileAssetRepository;
 
     @Autowired
     private JwtService jwtService;
@@ -441,5 +447,435 @@ class MessagingIntegrationTest {
         mockMvc.perform(get("/api/conversations/" + privateConversationId + "/messages")
                         .header("Authorization", "Bearer " + internToken))
                 .andExpect(status().isOk());
+    }
+
+    // -------------------------------------------------------------------------
+    // Production gate: SENT → DELIVERED → READ lifecycle
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Full lifecycle: SENT on persist, DELIVERED on fetch/ack, READ when all recipients read")
+    void fullLifecycleSentDeliveredRead() throws Exception {
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new SendMessageRequest("lifecycle-1"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.sequenceNumber").value(1))
+                .andExpect(jsonPath("$.status").value("SENT"));
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new SendMessageRequest("lifecycle-2"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("SENT"));
+
+        // Supervisor fetches history: implicit delivery ack → DELIVERED
+        MvcResult fetched = mockMvc.perform(get("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .param("size", "30")
+                        .param("sort", "sequenceNumber,asc"))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode content = objectMapper.readTree(fetched.getResponse().getContentAsString()).get("content");
+        assertThat(content.get(0).get("status").asText()).isEqualTo("DELIVERED");
+        assertThat(content.get(1).get("status").asText()).isEqualTo("DELIVERED");
+
+        // Explicit delivered ack is idempotent (already DELIVERED → no change)
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/delivered")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"upToSequenceNumber\":2}"))
+                .andExpect(status().isOk());
+
+        // Not yet READ: supervisor has not marked read
+        MvcResult beforeRead = mockMvc.perform(get("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .param("size", "30")
+                        .param("sort", "sequenceNumber,asc"))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(objectMapper.readTree(beforeRead.getResponse().getContentAsString())
+                .get("content").get(0).get("status").asText()).isEqualTo("DELIVERED");
+
+        // Supervisor marks read up to 2 → both become READ (sole recipient)
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/read")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"upToSequenceNumber\":2}"))
+                .andExpect(status().isNoContent());
+
+        MvcResult afterRead = mockMvc.perform(get("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .param("size", "30")
+                        .param("sort", "sequenceNumber,asc"))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode readContent = objectMapper.readTree(afterRead.getResponse().getContentAsString()).get("content");
+        assertThat(readContent.get(0).get("status").asText()).isEqualTo("READ");
+        assertThat(readContent.get(1).get("status").asText()).isEqualTo("READ");
+
+        // Sequence watermark persisted on the member
+        MvcResult conv = mockMvc.perform(get("/api/conversations/" + privateConversationId)
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode members = objectMapper.readTree(conv.getResponse().getContentAsString()).get("members");
+        boolean foundWatermark = false;
+        for (JsonNode m : members) {
+            if (m.get("userId").asText().equals(supervisorUser.getId().toString())) {
+                assertThat(m.get("lastReadSequenceNumber").asLong()).isEqualTo(2L);
+                foundWatermark = true;
+            }
+        }
+        assertThat(foundWatermark).isTrue();
+    }
+
+    @Test
+    @DisplayName("Unread counts are sequence-based and exclude the viewer's own messages")
+    void unreadCountsAreSequenceBasedAndExcludeOwn() throws Exception {
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new SendMessageRequest("u-1"))))
+                .andExpect(status().isCreated());
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new SendMessageRequest("u-2"))))
+                .andExpect(status().isCreated());
+
+        // Sender's own messages are never unread for the sender
+        MvcResult internUnread = mockMvc.perform(get("/api/conversations/unread/counts")
+                        .header("Authorization", "Bearer " + internToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(unreadFor(internUnread, privateConversationId)).isEqualTo(0L);
+
+        // Recipient sees 2 unread, then 0 after marking read
+        MvcResult supUnread = mockMvc.perform(get("/api/conversations/unread/counts")
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(unreadFor(supUnread, privateConversationId)).isEqualTo(2L);
+
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/read")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"upToSequenceNumber\":2}"))
+                .andExpect(status().isNoContent());
+
+        MvcResult supUnreadAfter = mockMvc.perform(get("/api/conversations/unread/counts")
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(unreadFor(supUnreadAfter, privateConversationId)).isEqualTo(0L);
+    }
+
+    @Test
+    @DisplayName("Watermark rewind and out-of-range acks are rejected")
+    void watermarkRewindAndOutOfRangeRejected() throws Exception {
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new SendMessageRequest("w-1"))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/read")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"upToSequenceNumber\":1}"))
+                .andExpect(status().isNoContent());
+
+        // Rewind rejected
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/read")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"upToSequenceNumber\":1}"))
+                .andExpect(status().isNoContent()); // idempotent equal watermark is fine
+
+        // Out of range rejected
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/read")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"upToSequenceNumber\":999}"))
+                .andExpect(status().isUnprocessableEntity());
+
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/delivered")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"upToSequenceNumber\":999}"))
+                .andExpect(status().isUnprocessableEntity());
+
+        // Invalid payloads rejected
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/read")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"upToSequenceNumber\":0}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    // -------------------------------------------------------------------------
+    // Production gate: attachment security matrix
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Attachment security: valid PDF accepted+downloadable, exe/oversize rejected, audited, hidden on delete")
+    void attachmentSecurityMatrix() throws Exception {
+        byte[] pdf = "%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF".getBytes(StandardCharsets.UTF_8);
+        MockMultipartFile pdfFile = new MockMultipartFile("file", "report.pdf", "application/pdf", pdf);
+
+        MvcResult sent = mockMvc.perform(multipart("/api/conversations/" + privateConversationId + "/messages/with-attachment")
+                        .file(pdfFile)
+                        .param("content", "see attached report")
+                        .header("Authorization", "Bearer " + internToken))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.attachments.length()").value(1))
+                .andReturn();
+        JsonNode sentNode = objectMapper.readTree(sent.getResponse().getContentAsString());
+        UUID messageId = UUID.fromString(sentNode.get("id").asText());
+        UUID attachmentId = UUID.fromString(sentNode.get("attachments").get(0).get("id").asText());
+        UUID fileAssetId = UUID.fromString(sentNode.get("attachments").get(0).get("fileAssetId").asText());
+
+        // Member download returns identical bytes
+        MvcResult download = mockMvc.perform(get("/api/conversations/attachments/" + attachmentId + "/download")
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(download.getResponse().getContentAsByteArray()).isEqualTo(pdf);
+        assertThat(download.getResponse().getContentType()).contains("application/pdf");
+
+        // Outsider cannot list or download
+        mockMvc.perform(get("/api/conversations/messages/" + messageId + "/attachments")
+                        .header("Authorization", "Bearer " + outsiderToken))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/conversations/attachments/" + attachmentId + "/download")
+                        .header("Authorization", "Bearer " + outsiderToken))
+                .andExpect(status().isForbidden());
+
+        // Executable rejected by MIME allow-list
+        MockMultipartFile exe = new MockMultipartFile("file", "evil.exe", "application/octet-stream",
+                new byte[]{0x4D, 0x5A, (byte) 0x90, 0x00, 0x03, 0x00, 0x00, 0x00});
+        mockMvc.perform(multipart("/api/conversations/" + privateConversationId + "/messages/with-attachment")
+                        .file(exe)
+                        .param("content", "try exe")
+                        .header("Authorization", "Bearer " + internToken))
+                .andExpect(status().isUnprocessableEntity());
+
+        // Oversized file rejected (OTHER limit 10 MB)
+        byte[] big = new byte[10 * 1024 * 1024 + 1];
+        big[0] = '%'; big[1] = 'P'; big[2] = 'D'; big[3] = 'F';
+        MockMultipartFile huge = new MockMultipartFile("file", "huge.pdf", "application/pdf", big);
+        mockMvc.perform(multipart("/api/conversations/" + privateConversationId + "/messages/with-attachment")
+                        .file(huge)
+                        .param("content", "try huge")
+                        .header("Authorization", "Bearer " + internToken))
+                .andExpect(status().isUnprocessableEntity());
+
+        // Soft-delete hides attachments but retains the FileAsset bytes for audit
+        mockMvc.perform(delete("/api/conversations/messages/" + messageId)
+                        .header("Authorization", "Bearer " + internToken))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/api/conversations/messages/" + messageId + "/attachments")
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        MvcResult gone = mockMvc.perform(get("/api/conversations/attachments/" + attachmentId + "/download")
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andReturn();
+        assertThat(gone.getResponse().getStatus()).isIn(403, 404);
+        assertThat(fileAssetRepository.findById(fileAssetId)).isPresent();
+    }
+
+    // -------------------------------------------------------------------------
+    // Production gate: group rules, rejoin, internship transitions
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Group rejoin retains watermark: messages sent while away stay unread")
+    void groupRejoinRetainsWatermark() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/conversations/group")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new CreateGroupRequest("rejoin-group", List.of(secondInternUser.getId())))))
+                .andExpect(status().isCreated())
+                .andReturn();
+        UUID groupId = UUID.fromString(objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText());
+
+        mockMvc.perform(post("/api/conversations/" + groupId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new SendMessageRequest("before-leave"))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/conversations/" + groupId + "/read")
+                        .header("Authorization", "Bearer " + secondInternToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"upToSequenceNumber\":1}"))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(post("/api/conversations/" + groupId + "/leave")
+                        .header("Authorization", "Bearer " + secondInternToken))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(post("/api/conversations/" + groupId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new SendMessageRequest("while-away"))))
+                .andExpect(status().isCreated());
+
+        // Moderator re-adds the leaver
+        mockMvc.perform(post("/api/conversations/" + groupId + "/members")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new tn.steg.backend.messaging.application.dto.AddMemberRequest(secondInternUser.getId()))))
+                .andExpect(status().isOk());
+
+        MvcResult unread = mockMvc.perform(get("/api/conversations/unread/counts")
+                        .header("Authorization", "Bearer " + secondInternToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(unreadFor(unread, groupId)).isEqualTo(1L);
+
+        mockMvc.perform(post("/api/conversations/" + groupId + "/messages")
+                        .header("Authorization", "Bearer " + secondInternToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new SendMessageRequest("back again"))))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    @DisplayName("Reassignment rotates the private thread: old supervisor blocked, no duplicate thread")
+    void reassignmentRotatesPrivateThread() throws Exception {
+        User sup2 = userRepository.saveAndFlush(new User("sup2_reassign@steg.com", "hash", UserStatus.ACTIVE));
+        String sup2Token = jwtService.generateAccessToken(sup2.getId(), sup2.getEmail(), List.of("ROLE_SUPERVISOR"));
+        Department dept2 = departmentRepository.saveAndFlush(new Department("DIR_REASSIGN", "Reassign Dept", "R"));
+        Employee emp2 = new Employee("EMP-REASSIGN-2", "New", "Supervisor", dept2);
+        emp2.setUser(sup2);
+        emp2 = employeeRepository.saveAndFlush(emp2);
+
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        internshipService.assign(internship.getId(), new InternshipAssignmentRequest(
+                dept2.getId(), emp2.getId(), LocalDate.now().minusDays(9), LocalDate.now().plusDays(60), "reassign"), hrPrincipal);
+
+        // Old supervisor loses access, new supervisor + intern keep it
+        mockMvc.perform(get("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + sup2Token))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken))
+                .andExpect(status().isOk());
+
+        // Still exactly one PRIVATE thread visible to the intern
+        MvcResult list = mockMvc.perform(get("/api/conversations")
+                        .header("Authorization", "Bearer " + internToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        long privates = 0;
+        for (JsonNode c : objectMapper.readTree(list.getResponse().getContentAsString())) {
+            if (c.get("type").asText().equals("PRIVATE")
+                    && c.get("id").asText().equals(privateConversationId.toString())) {
+                privates++;
+            }
+        }
+        assertThat(privates).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("Completed interns keep history but cannot join new groups")
+    void completedInternBlockedFromNewGroupsButKeepsHistory() throws Exception {
+        internship.setStatus(InternshipStatus.COMPLETED);
+        ((tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository).save(internship);
+
+        // Existing private history still readable
+        mockMvc.perform(get("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken))
+                .andExpect(status().isOk());
+
+        // But the completed intern cannot be added to a new group
+        MvcResult created = mockMvc.perform(post("/api/conversations/group")
+                        .header("Authorization", "Bearer " + secondInternToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new CreateGroupRequest("post-completion", List.of()))))
+                .andExpect(status().isCreated())
+                .andReturn();
+        UUID groupId = UUID.fromString(objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText());
+
+        mockMvc.perform(post("/api/conversations/" + groupId + "/members")
+                        .header("Authorization", "Bearer " + secondInternToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new tn.steg.backend.messaging.application.dto.AddMemberRequest(internUser.getId()))))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("Negative batch: validation, membership management guards, non-sender edit/delete")
+    void negativeBatch() throws Exception {
+        // Blank / oversized message rejected
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new SendMessageRequest(""))))
+                .andExpect(status().isBadRequest());
+
+        // Membership cannot be managed on PRIVATE threads
+        mockMvc.perform(post("/api/conversations/" + privateConversationId + "/members")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new tn.steg.backend.messaging.application.dto.AddMemberRequest(secondInternUser.getId()))))
+                .andExpect(status().isUnprocessableEntity());
+
+        // Non-intern cannot be added to a group
+        MvcResult created = mockMvc.perform(post("/api/conversations/group")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new CreateGroupRequest("neg-group", List.of(secondInternUser.getId())))))
+                .andExpect(status().isCreated())
+                .andReturn();
+        UUID groupId = UUID.fromString(objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText());
+
+        mockMvc.perform(post("/api/conversations/" + groupId + "/members")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new tn.steg.backend.messaging.application.dto.AddMemberRequest(outsiderUser.getId()))))
+                .andExpect(status().isUnprocessableEntity());
+
+        // Non-sender cannot delete; non-member cannot delete
+        MvcResult sent = mockMvc.perform(post("/api/conversations/" + privateConversationId + "/messages")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new SendMessageRequest("mine"))))
+                .andExpect(status().isCreated())
+                .andReturn();
+        UUID messageId = UUID.fromString(objectMapper.readTree(sent.getResponse().getContentAsString()).get("id").asText());
+
+        mockMvc.perform(delete("/api/conversations/messages/" + messageId)
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(delete("/api/conversations/messages/" + messageId)
+                        .header("Authorization", "Bearer " + outsiderToken))
+                .andExpect(status().isForbidden());
+    }
+
+    private long unreadFor(MvcResult unreadResult, UUID conversationId) throws Exception {
+        JsonNode arr = objectMapper.readTree(unreadResult.getResponse().getContentAsString());
+        for (JsonNode n : arr) {
+            if (n.get("conversationId").asText().equals(conversationId.toString())) {
+                return n.get("unreadCount").asLong();
+            }
+        }
+        return -1L;
     }
 }

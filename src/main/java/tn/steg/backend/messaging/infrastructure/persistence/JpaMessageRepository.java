@@ -32,4 +32,13 @@ public interface JpaMessageRepository
     long countByConversationId(UUID conversationId);
 
     long countByConversationIdAndSequenceNumberGreaterThan(UUID conversationId, Long sequenceNumber);
+
+    List<Message> findByConversationIdAndSequenceNumberLessThanEqualOrderBySequenceNumberAsc(
+            UUID conversationId, Long maxSequenceNumber);
+
+    @Query("select count(m) from Message m where m.conversation.id = :conversationId "
+            + "and m.sequenceNumber > :afterSequenceNumber and m.sender.id <> :excludeSenderId")
+    long countUnread(@Param("conversationId") UUID conversationId,
+                     @Param("afterSequenceNumber") Long afterSequenceNumber,
+                     @Param("excludeSenderId") UUID excludeSenderId);
 }

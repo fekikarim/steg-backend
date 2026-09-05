@@ -62,6 +62,22 @@ import java.util.UUID;
  * ({@code SELECT ... FOR UPDATE}) plus a defensive DB unique constraint
  * {@code uq_messages_conv_seq} (V19).
  *
+ * <p>Message lifecycle (single {@code status} column):
+ * <pre>
+ *   SENT      — persisted by the server, not yet delivered to any recipient.
+ *   DELIVERED — observed by at least one non-sender active member
+ *               (explicit delivery ack or history fetch).
+ *   READ      — every non-sender active member has a read watermark
+ *               ({@code lastReadSequenceNumber}) at or beyond this message.
+ *   EDITED    — content edited by the sender (terminal display state;
+ *               delivery/read evidence is preserved in member watermarks).
+ *   DELETED   — soft-deleted (content redacted, row + attachments kept
+ *               for audit; attachment bytes are retained, only hidden).
+ * </pre>
+ * Unread counts are sequence-based: messages with
+ * {@code sequenceNumber &gt; member.lastReadSequenceNumber} sent by someone
+ * else. {@code lastReadAt} is a wall-clock audit marker only.
+ *
  * <p>Messages are never hard-deleted: delete sets {@code deletedAt} +
  * status {@code DELETED} and redacts content on read.
  */
@@ -139,6 +155,8 @@ public class MessagingService {
             if (member.getLeftAt() != null) {
                 member.setLeftAt(null);
                 member.setJoinedAt(Instant.now());
+                // Watermarks are intentionally retained across rejoin so messages
+                // sent while away still count as unread (no history loss).
                 memberRepository.save(member);
                 auditService.log("CONVERSATION_MEMBER_REJOINED", "Conversation", conversation.getId(),
                         null, null, user.getId(), null);
@@ -192,16 +210,18 @@ public class MessagingService {
             if (existing.getLeftAt() == null) {
                 throw new BusinessRuleException("ALREADY_MEMBER", "User is already an active member of this conversation.");
             }
+            // Rejoin: watermarks retained so messages sent while away stay unread.
             existing.setLeftAt(null);
             existing.setJoinedAt(Instant.now());
             memberRepository.save(existing);
+            auditService.log("CONVERSATION_MEMBER_REJOINED", "Conversation", conversationId, null, null, actor.getId(), null);
         } else {
             assertIsCurrentIntern(userId);
             User user = findUserOrThrow(userId);
             memberRepository.save(new ConversationMember(conversation, user, ConversationMemberRole.MEMBER));
+            auditService.log("CONVERSATION_MEMBER_ADDED", "Conversation", conversationId, null, null, actor.getId(), null);
         }
 
-        auditService.log("CONVERSATION_MEMBER_ADDED", "Conversation", conversationId, null, null, actor.getId(), null);
         return toConversationResponse(conversation, actor.getId());
     }
 
@@ -242,7 +262,15 @@ public class MessagingService {
         return toConversationResponse(conversation, actor.getId());
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * Paginated history ordered by {@code sequenceNumber}.
+     * Fetching acts as an implicit delivery acknowledgement for the caller:
+     * the caller's delivery watermark advances to the highest sequence in the
+     * returned page and eligible {@code SENT} messages become {@code DELIVERED}.
+     * Explicit acks remain available via {@code markDelivered} for clients that
+     * receive messages over WebSocket without fetching history.
+     */
+    @Transactional
     public Page<MessageResponse> getHistory(UUID conversationId, Long cursorExclusive, Pageable pageable, UserPrincipal actor) {
         assertActiveMembership(conversationId, actor.getId());
         findConversationOrThrow(conversationId);
@@ -254,7 +282,18 @@ public class MessagingService {
         } else {
             page = messageRepository.findByConversationId(conversationId, pageable);
         }
-        return page.map(m -> MessageResponse.from(m, toAttachmentResponses(m.getId())));
+
+        // Implicit delivery ack (not audited per message to avoid audit spam on
+        // every history scroll; explicit markDelivered calls are audited).
+        if (!page.getContent().isEmpty()) {
+            long maxInPage = page.getContent().stream()
+                    .mapToLong(Message::getSequenceNumber)
+                    .max().orElse(0L);
+            advanceDeliveredWatermark(conversationId, maxInPage, actor.getId());
+        }
+
+        final Page<Message> result = page;
+        return result.map(m -> MessageResponse.from(m, toAttachmentResponses(m.getId())));
     }
 
     @Transactional(readOnly = true)
@@ -264,7 +303,7 @@ public class MessagingService {
         for (ConversationMember membership : memberships) {
             UUID conversationId = membership.getConversation().getId();
             Long lastSeq = messageRepository.findMaxSequenceNumber(conversationId).orElse(0L);
-            long unread = computeUnread(conversationId, membership, lastSeq);
+            long unread = computeUnread(conversationId, membership, actor.getId());
             result.add(new UnreadCountResponse(conversationId, unread, lastSeq));
         }
         return result;
@@ -302,6 +341,9 @@ public class MessagingService {
     @Transactional
     public MessageResponse sendMessageWithAttachment(
             UUID conversationId, String content, MultipartFile file, UserPrincipal actor) {
+        // Same transaction: BusinessRuleException (runtime) on attachment
+        // validation/storage failure rolls back the message row as well,
+        // so no orphan SENT message is left behind.
         MessageResponse sent = sendMessage(conversationId, content, actor);
         if (file == null || file.isEmpty()) {
             return sent;
@@ -340,6 +382,8 @@ public class MessagingService {
         message.setEditedAt(Instant.now());
         if (message.getStatus() == MessageStatus.SENT || message.getStatus() == MessageStatus.DELIVERED
                 || message.getStatus() == MessageStatus.READ) {
+            // EDITED is a terminal display state; delivery/read evidence is
+            // preserved in member watermarks (lastDelivered/ReadSequenceNumber).
             message.setStatus(MessageStatus.EDITED);
         }
         message = messageRepository.save(message);
@@ -349,7 +393,7 @@ public class MessagingService {
     }
 
     @Transactional
-    public void deleteMessage(UUID messageId, UserPrincipal actor) {
+    public MessageResponse deleteMessage(UUID messageId, UserPrincipal actor) {
         Message message = messageRepository.findById(messageId)
                 .orElseThrow(() -> new ResourceNotFoundException("Message not found: " + messageId));
         assertActiveMembership(message.getConversation().getId(), actor.getId());
@@ -360,19 +404,27 @@ public class MessagingService {
             throw new AccessDeniedException("Only the sender or staff may delete this message.");
         }
         if (message.getDeletedAt() != null) {
-            return;
+            return MessageResponse.from(message, List.of());
         }
 
         message.setDeletedAt(Instant.now());
         message.setStatus(MessageStatus.DELETED);
-        messageRepository.save(message);
+        message = messageRepository.save(message);
 
         auditService.log("MESSAGE_DELETED", "Message", messageId, null, null, actor.getId(), null);
         log.info("Message soft-deleted: id={} actor={}", messageId, actor.getId());
+        return MessageResponse.from(message, List.of());
     }
 
+    /**
+     * Explicit delivery acknowledgement up to a sequence number.
+     * Transitions eligible {@code SENT} messages (sent by someone else) to
+     * {@code DELIVERED}. Monotonic: rewinding a watermark is rejected.
+     *
+     * @return messages whose status changed (for WebSocket broadcast).
+     */
     @Transactional
-    public void markRead(UUID conversationId, Long upToSequenceNumber, UserPrincipal actor) {
+    public List<MessageResponse> markDelivered(UUID conversationId, Long upToSequenceNumber, UserPrincipal actor) {
         if (upToSequenceNumber == null || upToSequenceNumber <= 0) {
             throw new BusinessRuleException("INVALID_SEQUENCE", "upToSequenceNumber must be positive.");
         }
@@ -385,9 +437,129 @@ public class MessagingService {
             throw new BusinessRuleException("SEQUENCE_OUT_OF_RANGE",
                     "upToSequenceNumber exceeds the latest message sequence (" + maxSeq + ").");
         }
+        Long current = membership.getLastDeliveredSequenceNumber();
+        if (current != null && upToSequenceNumber < current) {
+            throw new BusinessRuleException("SEQUENCE_REWIND",
+                    "Cannot move the delivery watermark backwards (current: " + current + ").");
+        }
+
+        membership.setLastDeliveredSequenceNumber(upToSequenceNumber);
+        memberRepository.save(membership);
+
+        List<Message> candidates = messageRepository
+                .findByConversationIdAndSequenceNumberLessThanEqualOrderBySequenceNumberAsc(conversationId, upToSequenceNumber);
+        List<MessageResponse> changed = new ArrayList<>();
+        for (Message message : candidates) {
+            if (message.getStatus() == MessageStatus.SENT
+                    && !message.getSender().getId().equals(actor.getId())) {
+                message.setStatus(MessageStatus.DELIVERED);
+                messageRepository.save(message);
+                changed.add(MessageResponse.from(message, toAttachmentResponses(message.getId())));
+            }
+        }
+
+        auditService.log("MESSAGE_DELIVERED", "Conversation", conversationId, null, null, actor.getId(), null);
+        return changed;
+    }
+
+    /**
+     * Read acknowledgement up to a sequence number.
+     * Advances both watermarks (reading implies delivery) and promotes
+     * messages to {@code READ} once every non-sender active member has read
+     * at or beyond them.
+     *
+     * @return messages whose status changed (for WebSocket broadcast).
+     */
+    @Transactional
+    public List<MessageResponse> markRead(UUID conversationId, Long upToSequenceNumber, UserPrincipal actor) {
+        if (upToSequenceNumber == null || upToSequenceNumber <= 0) {
+            throw new BusinessRuleException("INVALID_SEQUENCE", "upToSequenceNumber must be positive.");
+        }
+        ConversationMember membership = memberRepository
+                .findActiveByConversationIdAndUserId(conversationId, actor.getId())
+                .orElseThrow(() -> new AccessDeniedException("You are not an active member of this conversation."));
+
+        Long maxSeq = messageRepository.findMaxSequenceNumber(conversationId).orElse(0L);
+        if (upToSequenceNumber > maxSeq) {
+            throw new BusinessRuleException("SEQUENCE_OUT_OF_RANGE",
+                    "upToSequenceNumber exceeds the latest message sequence (" + maxSeq + ").");
+        }
+        Long current = membership.getLastReadSequenceNumber();
+        if (current != null && upToSequenceNumber < current) {
+            throw new BusinessRuleException("SEQUENCE_REWIND",
+                    "Cannot move the read watermark backwards (current: " + current + ").");
+        }
 
         membership.setLastReadAt(Instant.now());
+        membership.setLastReadSequenceNumber(upToSequenceNumber);
+        Long delivered = membership.getLastDeliveredSequenceNumber();
+        if (delivered == null || delivered < upToSequenceNumber) {
+            membership.setLastDeliveredSequenceNumber(upToSequenceNumber);
+        }
         memberRepository.save(membership);
+
+        // Messages this reader now covers become at least DELIVERED; those read
+        // by every non-sender active member become READ. Only genuine status
+        // transitions are reported for broadcast (no duplicate noise).
+        List<Message> candidates = messageRepository
+                .findByConversationIdAndSequenceNumberLessThanEqualOrderBySequenceNumberAsc(conversationId, upToSequenceNumber);
+        List<ConversationMember> activeMembers = memberRepository.findActiveByConversationId(conversationId);
+        List<MessageResponse> changed = new ArrayList<>();
+        for (Message message : candidates) {
+            if (message.getStatus() == MessageStatus.EDITED || message.getStatus() == MessageStatus.DELETED) {
+                continue;
+            }
+            MessageStatus before = message.getStatus();
+            if (message.getStatus() == MessageStatus.SENT
+                    && !message.getSender().getId().equals(actor.getId())) {
+                message.setStatus(MessageStatus.DELIVERED);
+            }
+            if ((message.getStatus() == MessageStatus.DELIVERED || message.getStatus() == MessageStatus.SENT)
+                    && isReadByAllRecipients(message, activeMembers)) {
+                message.setStatus(MessageStatus.READ);
+            }
+            if (message.getStatus() != before) {
+                messageRepository.save(message);
+                changed.add(MessageResponse.from(message, toAttachmentResponses(message.getId())));
+            }
+        }
+
+        auditService.log("MESSAGE_READ", "Conversation", conversationId, null, null, actor.getId(), null);
+        return changed;
+    }
+
+    // -------------------------------------------------------------------------
+    // Attachments (membership-guarded, audited)
+    // -------------------------------------------------------------------------
+
+    @Transactional(readOnly = true)
+    public List<MessageResponse.AttachmentResponse> listAttachments(UUID messageId, UserPrincipal actor) {
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ResourceNotFoundException("Message not found: " + messageId));
+        assertActiveMembership(message.getConversation().getId(), actor.getId());
+        if (message.getDeletedAt() != null) {
+            return List.of();
+        }
+        return toAttachmentResponses(messageId);
+    }
+
+    public record AttachmentDownload(InputStream inputStream, String fileName, String mimeType, long size) {}
+
+    @Transactional
+    public AttachmentDownload downloadAttachment(UUID attachmentId, UserPrincipal actor, String ipAddress) {
+        MessageAttachment attachment = attachmentRepository.findById(attachmentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Attachment not found: " + attachmentId));
+        Message message = attachment.getMessage();
+        assertActiveMembership(message.getConversation().getId(), actor.getId());
+        if (message.getDeletedAt() != null) {
+            throw new ResourceNotFoundException("Attachment not found: " + attachmentId);
+        }
+
+        FileAsset asset = attachment.getFile();
+        auditService.log("MESSAGE_ATTACHMENT_DOWNLOADED", "MessageAttachment", attachmentId,
+                null, null, actor.getId(), ipAddress);
+        InputStream stream = fileStorageService.getInputStream(asset.getStorageKey());
+        return new AttachmentDownload(stream, asset.getOriginalFileName(), asset.getMimeType(), asset.getSize());
     }
 
     // -------------------------------------------------------------------------
@@ -441,29 +613,65 @@ public class MessagingService {
         }
     }
 
-    private long computeUnread(UUID conversationId, ConversationMember membership, Long lastSeq) {
-        if (membership.getLastReadAt() == null) {
-            return messageRepository.countByConversationId(conversationId);
+    /**
+     * Sequence-based unread count: messages after the member's read watermark
+     * ({@code lastReadSequenceNumber}, NULL = 0) sent by someone else.
+     */
+    private long computeUnread(UUID conversationId, ConversationMember membership, UUID viewerId) {
+        Long watermark = membership.getLastReadSequenceNumber();
+        long after = watermark != null ? watermark : 0L;
+        return messageRepository.countUnread(conversationId, after, viewerId);
+    }
+
+    private boolean isReadByAllRecipients(Message message, List<ConversationMember> activeMembers) {
+        for (ConversationMember member : activeMembers) {
+            if (member.getUser().getId().equals(message.getSender().getId())) {
+                continue;
+            }
+            Long watermark = member.getLastReadSequenceNumber();
+            if (watermark == null || watermark < message.getSequenceNumber()) {
+                return false;
+            }
         }
-        // Approximate via sequence watermark: messages after the last read marker.
-        // lastReadAt is time-based while ordering is sequence-based; counting all
-        // messages is a safe upper bound until per-member sequence watermarks exist.
-        // TODO — STEG VALIDATION REQUIRED: confirm unread definition
-        // (per-member lastReadSequence vs lastReadAt timestamp).
-        return messageRepository.countByConversationId(conversationId);
+        return true;
+    }
+
+    private void advanceDeliveredWatermark(UUID conversationId, long upToSeq, UUID userId) {
+        var membershipOpt = memberRepository.findActiveByConversationIdAndUserId(conversationId, userId);
+        if (membershipOpt.isEmpty()) {
+            return;
+        }
+        ConversationMember membership = membershipOpt.get();
+        Long current = membership.getLastDeliveredSequenceNumber();
+        if (current != null && current >= upToSeq) {
+            // Still promote already-fetched SENT messages (first fetch wins).
+        } else {
+            membership.setLastDeliveredSequenceNumber(upToSeq);
+            memberRepository.save(membership);
+        }
+        List<Message> candidates = messageRepository
+                .findByConversationIdAndSequenceNumberLessThanEqualOrderBySequenceNumberAsc(conversationId, upToSeq);
+        for (Message message : candidates) {
+            if (message.getStatus() == MessageStatus.SENT
+                    && !message.getSender().getId().equals(userId)) {
+                message.setStatus(MessageStatus.DELIVERED);
+                messageRepository.save(message);
+            }
+        }
     }
 
     private ConversationResponse toConversationResponse(Conversation conversation, UUID viewerId) {
         List<ConversationResponse.MemberResponse> members = memberRepository
                 .findActiveByConversationId(conversation.getId()).stream()
                 .map(m -> new ConversationResponse.MemberResponse(
-                        m.getUser().getId(), m.getRole().name(), m.getJoinedAt(), m.getLastReadAt()))
+                        m.getUser().getId(), m.getRole().name(), m.getJoinedAt(), m.getLastReadAt(),
+                        m.getLastReadSequenceNumber(), m.getLastDeliveredSequenceNumber()))
                 .toList();
         Long lastSeq = messageRepository.findMaxSequenceNumber(conversation.getId()).orElse(0L);
         Long unread = 0L;
         var viewerMembership = memberRepository.findActiveByConversationIdAndUserId(conversation.getId(), viewerId);
         if (viewerMembership.isPresent()) {
-            unread = computeUnread(conversation.getId(), viewerMembership.get(), lastSeq);
+            unread = computeUnread(conversation.getId(), viewerMembership.get(), viewerId);
         }
         return ConversationResponse.from(conversation, members, lastSeq, unread);
     }
@@ -482,7 +690,9 @@ public class MessagingService {
     /**
      * Stores a chat attachment through the same validation pipeline as Phase A6
      * (size caps, Tika MIME inspection, spoof detection, malware hook).
-     * Chat attachments reuse {@code DocumentType.OTHER} limits (10 MB default).
+     * Chat attachments reuse {@code DocumentType.OTHER} limits: PDF/JPEG/PNG
+     * only, 10 MB default. Anything else (executables, scripts, archives,
+     * oversized files) is rejected before any bytes reach storage.
      */
     private FileAsset storeChatAttachment(MultipartFile file, UserPrincipal actor) {
         byte[] bytes;

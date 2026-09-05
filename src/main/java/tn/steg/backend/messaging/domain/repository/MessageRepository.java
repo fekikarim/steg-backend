@@ -23,6 +23,14 @@ public interface MessageRepository {
             UUID conversationId, Long maxSequenceNumber, Pageable pageable);
     List<Message> findByConversationIdAndSequenceNumberGreaterThanOrderBySequenceNumberAsc(
             UUID conversationId, Long afterSequence);
+    List<Message> findByConversationIdAndSequenceNumberLessThanEqualOrderBySequenceNumberAsc(
+            UUID conversationId, Long maxSequenceNumber);
     long countByConversationId(UUID conversationId);
     long countByConversationIdAndSequenceNumberGreaterThan(UUID conversationId, Long sequenceNumber);
+    /**
+     * Sequence-based unread count: messages after the member's read watermark,
+     * excluding the viewer's own messages (a sender has nothing unread in
+     * their own sends).
+     */
+    long countUnread(UUID conversationId, Long afterSequenceNumber, UUID excludeSenderId);
 }

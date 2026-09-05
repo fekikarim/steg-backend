@@ -29,7 +29,9 @@ public record ConversationResponse(
             UUID userId,
             String role,
             Instant joinedAt,
-            Instant lastReadAt
+            Instant lastReadAt,
+            Long lastReadSequenceNumber,
+            Long lastDeliveredSequenceNumber
     ) {}
 
     public static ConversationResponse from(

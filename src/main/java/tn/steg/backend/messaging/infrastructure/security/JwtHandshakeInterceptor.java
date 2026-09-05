@@ -21,13 +21,19 @@ import java.util.UUID;
 /**
  * Validates the existing JWT access token during the WebSocket handshake.
  *
- * <p>Browsers cannot always set an {@code Authorization} header on the WS
- * upgrade request, so the token is accepted from (in order):
- * <ol>
- *   <li>{@code Authorization: Bearer &lt;token&gt;} header,</li>
- *   <li>{@code ?token=&lt;jwt&gt;} query parameter (used by SockJS/mobile clients).</li>
- * </ol>
- * On success the resolved {@link UserPrincipal} is stored in the handshake
+ * <p>Clients MUST prefer the {@code Authorization: Bearer &lt;token&gt;} header
+ * (STOMP CONNECT native header, or HTTP header on the upgrade request).
+ * The {@code ?token=} query parameter exists only as a fallback for
+ * environments that cannot set headers on the upgrade request (plain
+ * browser WebSocket, some SockJS/mobile clients).
+ *
+ * <p>Production safety: query strings are routinely captured in access logs,
+ * proxies and browser history. Deployments MUST use {@code wss}, short-lived
+ * access tokens, and access-log formats that exclude query strings; the query
+ * fallback should be disabled at the edge where headers are always available.
+ * This interceptor never logs token values — only the sanitized path.
+ *
+ * <p>On success the resolved {@link UserPrincipal} is stored in the handshake
  * attributes for the {@code PrincipalHandshakeHandler} and the STOMP
  * channel interceptor. On failure the handshake is rejected (401).
  */
@@ -45,7 +51,8 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
                                    WebSocketHandler wsHandler, Map<String, Object> attributes) {
         String token = extractToken(request);
         if (!StringUtils.hasText(token)) {
-            log.debug("WS handshake rejected: missing token (uri={})", request.getURI());
+            // Never log request.getURI(): it may embed ?token=<jwt>.
+            log.debug("WS handshake rejected: missing token (path={})", sanitizePath(request));
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
         }
@@ -68,6 +75,18 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
     @Override
     public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                WebSocketHandler wsHandler, Exception exception) {
+    }
+
+    /**
+     * Returns the request path without the query string for safe logging.
+     */
+    private String sanitizePath(ServerHttpRequest request) {
+        try {
+            String path = request.getURI().getPath();
+            return path != null ? path : "/ws";
+        } catch (Exception e) {
+            return "/ws";
+        }
     }
 
     private String extractToken(ServerHttpRequest request) {

@@ -48,6 +48,24 @@ public class ConversationMember extends BaseEntity {
     @Column(name = "last_read_at")
     private Instant lastReadAt;
 
+    /**
+     * Authoritative per-member read watermark (highest message
+     * {@code sequenceNumber} this member has acknowledged as read).
+     * Ordering is defined by {@code sequenceNumber}, never by timestamps;
+     * {@code lastReadAt} is retained only as a wall-clock audit marker.
+     */
+    @Column(name = "last_read_sequence_number")
+    private Long lastReadSequenceNumber;
+
+    /**
+     * Per-member delivery watermark (highest message {@code sequenceNumber}
+     * this member has acknowledged as delivered/received).
+     * Reading implies delivery: {@code markRead} always advances this
+     * watermark to at least the read sequence.
+     */
+    @Column(name = "last_delivered_sequence_number")
+    private Long lastDeliveredSequenceNumber;
+
     public ConversationMember(Conversation conversation, User user, ConversationMemberRole role) {
         this.conversation = conversation;
         this.user = user;
