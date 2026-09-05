@@ -2,6 +2,7 @@ package tn.steg.backend.messaging.application;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
@@ -24,6 +25,7 @@ import tn.steg.backend.iam.domain.repository.UserRepository;
 import tn.steg.backend.internship.domain.model.Internship;
 import tn.steg.backend.internship.domain.model.InternshipStatus;
 import tn.steg.backend.internship.domain.repository.InternshipRepository;
+import tn.steg.backend.organization.domain.repository.EmployeeRepository;
 import tn.steg.backend.messaging.application.dto.ConversationResponse;
 import tn.steg.backend.messaging.application.dto.MessageResponse;
 import tn.steg.backend.messaging.application.dto.UnreadCountResponse;
@@ -92,12 +94,21 @@ public class MessagingService {
     private final MessageAttachmentRepository attachmentRepository;
     private final InternshipRepository internshipRepository;
     private final CandidateRepository candidateRepository;
+    private final EmployeeRepository employeeRepository;
     private final UserRepository userRepository;
     private final FileAssetRepository fileAssetRepository;
     private final FileStorageService fileStorageService;
     private final DocumentValidationService documentValidationService;
     private final MalwareScanner malwareScanner;
     private final AuditService auditService;
+
+    /**
+     * GROUP access policy once an internship ends ({@code retain} default |
+     * {@code revoke}). PRIVATE threads are unaffected in both modes.
+     * TODO — STEG VALIDATION REQUIRED: confirm the final value with STEG policy.
+     */
+    @Value("${steg.messaging.groups.completed-intern-access:retain}")
+    private String completedInternAccess;
 
     // -------------------------------------------------------------------------
     // Private threads (Intern <-> ACTIVE supervisor)
@@ -180,6 +191,10 @@ public class MessagingService {
         }
 
         User creator = findUserOrThrow(actor.getId());
+        if (isRevokePolicy() && !hasGroupStanding(actor.getId())) {
+            throw new BusinessRuleException("NOT_CURRENT_INTERN",
+                    "GROUP conversations are scoped to users with a currently ACTIVE internship.");
+        }
 
         Conversation conversation = new Conversation(ConversationType.GROUP, title.strip(), null);
         conversation = conversationRepository.save(conversation);
@@ -211,6 +226,10 @@ public class MessagingService {
                 throw new BusinessRuleException("ALREADY_MEMBER", "User is already an active member of this conversation.");
             }
             // Rejoin: watermarks retained so messages sent while away stay unread.
+            if (isRevokePolicy() && !hasGroupStanding(existing.getUser().getId())) {
+                throw new BusinessRuleException("NOT_CURRENT_INTERN",
+                        "GROUP conversations are scoped to users with a currently ACTIVE internship.");
+            }
             existing.setLeftAt(null);
             existing.setJoinedAt(Instant.now());
             memberRepository.save(existing);
@@ -243,6 +262,7 @@ public class MessagingService {
     @Transactional(readOnly = true)
     public List<ConversationResponse> listMyConversations(UserPrincipal actor) {
         List<ConversationMember> memberships = memberRepository.findActiveByUserId(actor.getId());
+        boolean revoke = isRevokePolicy() && !hasGroupStanding(actor.getId());
         List<ConversationResponse> result = new ArrayList<>();
         for (ConversationMember membership : memberships) {
             Conversation conversation = conversationRepository.findById(membership.getConversation().getId())
@@ -250,9 +270,32 @@ public class MessagingService {
             if (conversation == null) {
                 continue;
             }
+            if (revoke && conversation.getType() == ConversationType.GROUP) {
+                continue;
+            }
             result.add(toConversationResponse(conversation, actor.getId()));
         }
         return result;
+    }
+
+    /**
+     * Visibility probe used by the STOMP SUBSCRIBE guard: the caller may
+     * subscribe to {@code /topic/conversations/{id}} only when actively
+     * entitled (same rule as reads, including the revoke-mode GROUP policy).
+     * Returns false for unknown ids without distinguishing them.
+     */
+    @Transactional(readOnly = true)
+    public boolean isConversationVisible(UUID conversationId, UUID userId) {
+        var conversation = conversationRepository.findById(conversationId);
+        if (conversation.isEmpty()) {
+            return false;
+        }
+        if (memberRepository.findActiveByConversationIdAndUserId(conversationId, userId).isEmpty()) {
+            return false;
+        }
+        return conversation.get().getType() != ConversationType.GROUP
+                || !isRevokePolicy()
+                || hasGroupStanding(userId);
     }
 
     @Transactional(readOnly = true)
@@ -299,9 +342,16 @@ public class MessagingService {
     @Transactional(readOnly = true)
     public List<UnreadCountResponse> getUnreadCounts(UserPrincipal actor) {
         List<ConversationMember> memberships = memberRepository.findActiveByUserId(actor.getId());
+        boolean revoke = isRevokePolicy() && !hasGroupStanding(actor.getId());
         List<UnreadCountResponse> result = new ArrayList<>();
         for (ConversationMember membership : memberships) {
             UUID conversationId = membership.getConversation().getId();
+            if (revoke) {
+                var conversation = conversationRepository.findById(conversationId).orElse(null);
+                if (conversation != null && conversation.getType() == ConversationType.GROUP) {
+                    continue;
+                }
+            }
             Long lastSeq = messageRepository.findMaxSequenceNumber(conversationId).orElse(0L);
             long unread = computeUnread(conversationId, membership, actor.getId());
             result.add(new UnreadCountResponse(conversationId, unread, lastSeq));
@@ -579,11 +629,42 @@ public class MessagingService {
     private void assertActiveMembership(UUID conversationId, UUID userId) {
         // Existence is intentionally hidden: unknown ids and non-member ids
         // both surface as 403/404 without leaking which conversations exist.
-        boolean conversationExists = conversationRepository.findById(conversationId).isPresent();
-        boolean isMember = memberRepository.findActiveByConversationIdAndUserId(conversationId, userId).isPresent();
-        if (!conversationExists || !isMember) {
+        var conversation = conversationRepository.findById(conversationId);
+        boolean isMember = conversation.isPresent()
+                && memberRepository.findActiveByConversationIdAndUserId(conversationId, userId).isPresent();
+        if (conversation.isEmpty() || !isMember) {
             throw new AccessDeniedException("You are not an active member of this conversation.");
         }
+        // Completed-intern GROUP policy (revoke mode only; PRIVATE unaffected).
+        if (isRevokePolicy()
+                && conversation.get().getType() == ConversationType.GROUP
+                && !hasGroupStanding(userId)) {
+            throw new AccessDeniedException("You are not an active member of this conversation.");
+        }
+    }
+
+    private boolean isRevokePolicy() {
+        return "revoke".equalsIgnoreCase(completedInternAccess);
+    }
+
+    /**
+     * Current GROUP standing: an ACTIVE internship, an employee record, or a
+     * staff platform role. Used only when the revoke policy is enabled.
+     */
+    private boolean hasGroupStanding(UUID userId) {
+        if (!internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.ACTIVE).isEmpty()) {
+            return true;
+        }
+        if (employeeRepository.findByUserId(userId).isPresent()) {
+            return true;
+        }
+        return userRepository.findById(userId)
+                .map(user -> user.getAssignedRoles().stream()
+                        .map(role -> role.getCode() == null ? ""
+                                : role.getCode().toUpperCase().replaceFirst("^ROLE_", ""))
+                        .anyMatch(code -> code.equals("ADMIN") || code.equals("HR") || code.equals("DIRECTOR")
+                                || code.equals("SUPERVISOR") || code.equals("FINANCE")))
+                .orElse(false);
     }
 
     private void assertGroupOnly(Conversation conversation) {

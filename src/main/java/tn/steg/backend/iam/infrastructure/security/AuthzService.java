@@ -111,6 +111,9 @@ public class AuthzService {
      * member of the conversation. Backs every messaging endpoint via
      * {@code @PreAuthorize("@authz.isOwnConversation(#conversationId)")}.
      * Unknown ids return false (→ 403/404) without leaking existence.
+     * Row-based on purpose: the revoke-mode GROUP standing policy is enforced
+     * inside {@code MessagingService} (so relinquishing access via leave keeps
+     * working); every other messaging operation re-checks there.
      */
     public boolean isOwnConversation(UUID conversationId) {
         if (conversationId == null || !isAuthenticated()) {

@@ -76,7 +76,7 @@ errors on `/user/queue/errors`.
 | Size cap (10 MB default) | Enforced pre-storage (`FILE_TOO_LARGE`) |
 | Private storage (opaque UUID subfolder outside webroot, no public URL) | Yes (`LocalFileStorageService`) |
 | Membership authorization (upload/list/download) | Yes, per operation; deleted-message attachments blocked |
-| Malware scanning | **NoOp hook only (always clean)** — NOT production-safe (see §7) |
+| Malware scanning | ClamAV via `MALWARE_MODE=clamav` (fail-closed default); NoOp only when mode ≠ clamav (dev) |
 | Atomicity (message + file in one tx; validation failure rolls back) | Yes (`BusinessRuleException` is unchecked) |
 | Deletion | Files retained on soft-delete (audit); hidden from reads |
 | Access auditing | `MESSAGE_ATTACHMENT_ADDED` on upload, `MESSAGE_ATTACHMENT_DOWNLOADED` (actor + IP) on download |
@@ -91,15 +91,18 @@ reach logs (covered by `JwtHandshakeInterceptorTest`). Deployments MUST use
 
 ## 7. Known limitations (do not expand scope without validation)
 
-1. **NoOp malware scanner**: wire a real ClamAV/VirusTotal bean (named
-   `customMalwareScanner`) before accepting untrusted uploads in production.
+1. **Malware scanner operations**: `MALWARE_MODE=clamav` + healthy clamd
+   required pre-production; `MALWARE_ON_ERROR` stays `reject` (fail-closed).
+   `allow` is an explicitly-logged emergency degraded mode only.
 2. Storage keys embed the sanitized original filename (may carry PII); consider
    UUID filenames if STEG requires it.
 3. Unread excludes own messages by design; `EDITED`/`DELETED` are terminal
    display states (watermarks still prove delivery/read).
-4. GROUP intern-scope is enforced at add/create time, not continuously:
-   completed interns keep history but cannot join new groups (staff should
-   prune groups on completion if STEG policy requires it).
+4. GROUP intern-scope is enforced at add/create time; post-completion access
+   follows `GROUPS_COMPLETED_INTERN_ACCESS` (`retain` default: history kept;
+   `revoke`: GROUP reads/writes additionally require ACTIVE-intern or staff
+   standing, PRIVATE threads always survive). TODO — STEG VALIDATION REQUIRED:
+   confirm the final value.
 5. Delivery/read broadcasts are per-message frames; very large ack ranges fan
    out proportionally (acceptable for MVP volumes).
 6. Private-thread leave is permitted (history preserved); next assignment
@@ -111,6 +114,10 @@ reach logs (covered by `JwtHandshakeInterceptorTest`). Deployments MUST use
 negatives, attachment matrix, rejoin, reassignment, completion, negative batch),
 `MessagingConcurrencyTest` (20 parallel senders, gapless 1..20),
 `JwtHandshakeInterceptorTest` (3), `MessagingWebSocketIntegrationTest`
-(3: round-trip, STOMP acks, REST→WS broadcasts).
-Full `./mvnw clean verify`: **126 tests, 0 failures, 0 errors, 0 skipped —
-BUILD SUCCESS** (includes ArchUnit clean-architecture + deny-by-default gates).
+(deployment: round-trip, STOMP acks, REST→WS broadcasts, tokenless/expired
+handshake rejection, non-member SUBSCRIBE/SEND containment),
+`GroupAccessPolicyTest` (revoke mode), `MessagingContractTest` (wire shapes),
+`ClamAvMalwareScannerTest` (5: INSTREAM, FOUND, fail-closed/open, dropped
+connection). Full `./mvnw clean verify`: **141 tests, 0 failures, 0 errors,
+0 skipped — BUILD SUCCESS** (includes ArchUnit clean-architecture +
+deny-by-default gates).

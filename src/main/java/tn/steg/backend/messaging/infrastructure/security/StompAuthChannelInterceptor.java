@@ -9,12 +9,14 @@ import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.iam.infrastructure.security.JwtService;
+import tn.steg.backend.messaging.application.MessagingService;
 
 import java.util.List;
 import java.util.UUID;
@@ -25,16 +27,25 @@ import java.util.UUID;
  * <p>On {@code CONNECT} the JWT is taken from the native {@code Authorization}
  * header (or the handshake principal stored by {@link JwtHandshakeInterceptor})
  * and the resulting authentication is attached to the accessor, so subsequent
- * frames carry {@code getUser()}. The per-conversation membership check itself
- * still happens in {@code MessagingStompController}/{@code MessagingService}
- * on every {@code SEND} — this interceptor only guarantees authentication.
+ * frames carry {@code getUser()}.
+ *
+ * <p>On {@code SUBSCRIBE} to {@code /topic/conversations/{id}} the interceptor
+ * additionally enforces conversation visibility (active membership, including
+ * the revoke-mode GROUP policy) via {@link MessagingService}. Without this,
+ * anyone guessing a conversation id could subscribe to its broadcast topic and
+ * receive messages they are not entitled to read. Per-message {@code SEND}
+ * authorization still happens in {@code MessagingStompController}/
+ * {@code MessagingService} on every frame.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
+    private static final String CONVERSATION_TOPIC_PREFIX = "/topic/conversations/";
+
     private final JwtService jwtService;
+    private final MessagingService messagingService;
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
@@ -50,8 +61,45 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
                 throw new IllegalArgumentException("Missing or invalid Authorization token for STOMP CONNECT.");
             }
             accessor.setUser(authentication);
+            return message;
+        }
+
+        if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
+            UUID conversationId = conversationTopic(accessor.getDestination());
+            if (conversationId != null) {
+                UserPrincipal principal = currentPrincipal(accessor);
+                if (principal == null
+                        || !messagingService.isConversationVisible(conversationId, principal.getId())) {
+                    // Generic message: unknown ids and forbidden ids are
+                    // indistinguishable to the subscriber.
+                    log.debug("STOMP SUBSCRIBE denied for conversation topic");
+                    throw new AccessDeniedException("You are not an active member of this conversation.");
+                }
+            }
         }
         return message;
+    }
+
+    private UUID conversationTopic(String destination) {
+        if (!StringUtils.hasText(destination) || !destination.startsWith(CONVERSATION_TOPIC_PREFIX)) {
+            return null;
+        }
+        try {
+            return UUID.fromString(destination.substring(CONVERSATION_TOPIC_PREFIX.length()));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private UserPrincipal currentPrincipal(StompHeaderAccessor accessor) {
+        if (accessor.getUser() instanceof UsernamePasswordAuthenticationToken authentication
+                && authentication.getPrincipal() instanceof UserPrincipal principal) {
+            return principal;
+        }
+        if (accessor.getUser() instanceof UserPrincipal principal) {
+            return principal;
+        }
+        return null;
     }
 
     private UsernamePasswordAuthenticationToken resolveAuthentication(StompHeaderAccessor accessor) {

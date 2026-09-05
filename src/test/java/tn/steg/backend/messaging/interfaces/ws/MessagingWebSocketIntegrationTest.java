@@ -44,8 +44,11 @@ import tn.steg.backend.organization.infrastructure.persistence.EmployeeRepositor
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
+import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -53,6 +56,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Phase A9 WebSocket round-trip test: two authenticated sessions
@@ -102,9 +106,17 @@ class MessagingWebSocketIntegrationTest {
 
     private User internUser;
     private User supervisorUser;
+    private User outsiderUser;
     private String internToken;
     private String supervisorToken;
+    private String outsiderToken;
     private UUID conversationId;
+
+    @org.springframework.beans.factory.annotation.Value("${steg.security.jwt.secret-key}")
+    private String jwtSecret;
+
+    @org.springframework.beans.factory.annotation.Value("${steg.security.jwt.issuer}")
+    private String jwtIssuer;
 
     private final List<StompSession> sessions = new java.util.ArrayList<>();
 
@@ -118,6 +130,8 @@ class MessagingWebSocketIntegrationTest {
 
         supervisorToken = jwtService.generateAccessToken(supervisorUser.getId(), supervisorUser.getEmail(), List.of("ROLE_SUPERVISOR"));
         internToken = jwtService.generateAccessToken(internUser.getId(), internUser.getEmail(), List.of("ROLE_INTERN", "ROLE_CANDIDATE"));
+        outsiderUser = userRepository.saveAndFlush(new User("outsider_ws_" + suffix + "@steg.com", "hash", UserStatus.ACTIVE));
+        outsiderToken = jwtService.generateAccessToken(outsiderUser.getId(), outsiderUser.getEmail(), List.of("ROLE_CANDIDATE"));
 
         Department dept = departmentRepository.saveAndFlush(new Department("DIR_WS_" + suffix, "Direction WS", "WS"));
         Employee supervisorEmployee = new Employee("EMP-WS-" + suffix, "Ws", "Supervisor", dept);
@@ -298,6 +312,94 @@ class MessagingWebSocketIntegrationTest {
                 .method("PATCH", java.net.http.HttpRequest.BodyPublishers.ofString(json))
                 .build();
         return httpClient.send(request, java.net.http.HttpResponse.BodyHandlers.discarding()).statusCode();
+    }
+
+    @Test
+    @DisplayName("Deployment: handshake without a token is rejected")
+    void handshakeWithoutTokenFails() {
+        WebSocketStompClient client = stompClient();
+        assertThatThrownBy(() -> client.connectAsync(
+                        "ws://localhost:" + port + "/ws",
+                        new org.springframework.web.socket.WebSocketHttpHeaders(),
+                        new StompHeaders(),
+                        new StompSessionHandlerAdapter() {})
+                .get(8, TimeUnit.SECONDS))
+                .isNotNull();
+    }
+
+    @Test
+    @DisplayName("Deployment: handshake with an expired token is rejected")
+    void expiredTokenHandshakeFails() {
+        javax.crypto.SecretKey key = io.jsonwebtoken.security.Keys
+                .hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
+        Instant now = Instant.now();
+        String expired = io.jsonwebtoken.Jwts.builder()
+                .subject(outsiderUser.getId().toString())
+                .issuer(jwtIssuer)
+                .issuedAt(Date.from(now.minus(30, ChronoUnit.MINUTES)))
+                .expiration(Date.from(now.minus(15, ChronoUnit.MINUTES)))
+                .claim("email", outsiderUser.getEmail())
+                .claim("roles", List.of("ROLE_CANDIDATE"))
+                .signWith(key)
+                .compact();
+
+        WebSocketStompClient client = stompClient();
+        assertThatThrownBy(() -> client.connectAsync(
+                        "ws://localhost:" + port + "/ws?token=" + expired,
+                        new org.springframework.web.socket.WebSocketHttpHeaders(),
+                        new StompHeaders(),
+                        new StompSessionHandlerAdapter() {})
+                .get(8, TimeUnit.SECONDS))
+                .isNotNull();
+    }
+
+    @Test
+    @DisplayName("Deployment: guessed topic SUBSCRIBE by a non-member delivers nothing")
+    void nonMemberSubscribeDeliversNothing() throws Exception {
+        BlockingQueue<JsonNode> supervisorInbox = new ArrayBlockingQueue<>(10);
+        BlockingQueue<JsonNode> outsiderTopicInbox = new ArrayBlockingQueue<>(10);
+
+        StompSession supervisorSession = connect(stompClient(), supervisorToken);
+        StompSession outsiderSession = connect(stompClient(), outsiderToken);
+        sessions.add(supervisorSession);
+        sessions.add(outsiderSession);
+
+        supervisorSession.subscribe("/topic/conversations/" + conversationId, frame(supervisorInbox));
+        // Guessed topic subscription by a non-member: denied server-side (the
+        // session may additionally be closed); either way nothing arrives.
+        outsiderSession.subscribe("/topic/conversations/" + conversationId, frame(outsiderTopicInbox));
+        Thread.sleep(500);
+
+        StompHeaders sendHeaders = new StompHeaders();
+        sendHeaders.setDestination("/app/conversations/" + conversationId + "/send");
+        supervisorSession.send(sendHeaders, java.util.Map.of("content", "members only"));
+        assertThat(supervisorInbox.poll(10, TimeUnit.SECONDS)).isNotNull();
+        assertThat(outsiderTopicInbox.poll(3, TimeUnit.SECONDS)).isNull();
+    }
+
+    @Test
+    @DisplayName("Deployment: non-member SEND gets ACCESS_DENIED on the sender error queue only")
+    void nonMemberSendYieldsSenderScopedError() throws Exception {
+        BlockingQueue<JsonNode> supervisorInbox = new ArrayBlockingQueue<>(10);
+        BlockingQueue<JsonNode> outsiderErrors = new ArrayBlockingQueue<>(10);
+
+        StompSession supervisorSession = connect(stompClient(), supervisorToken);
+        // Fresh session that only listens on its own error queue (never the topic)
+        StompSession outsiderSession = connect(stompClient(), outsiderToken);
+        sessions.add(supervisorSession);
+        sessions.add(outsiderSession);
+
+        supervisorSession.subscribe("/topic/conversations/" + conversationId, frame(supervisorInbox));
+        outsiderSession.subscribe("/user/queue/errors", frame(outsiderErrors));
+        Thread.sleep(500);
+
+        StompHeaders intruderHeaders = new StompHeaders();
+        intruderHeaders.setDestination("/app/conversations/" + conversationId + "/send");
+        outsiderSession.send(intruderHeaders, java.util.Map.of("content", "intrude"));
+        JsonNode error = outsiderErrors.poll(10, TimeUnit.SECONDS);
+        assertThat(error).isNotNull();
+        assertThat(error.get("code").asText()).isEqualTo("ACCESS_DENIED");
+        assertThat(supervisorInbox.poll(3, TimeUnit.SECONDS)).isNull();
     }
 
     @SuppressWarnings("deprecation")

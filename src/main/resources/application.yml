@@ -61,9 +61,27 @@ steg:
     lockout:
       max-failed-attempts: ${LOCKOUT_MAX_ATTEMPTS:5}
       duration-minutes: ${LOCKOUT_DURATION_MINUTES:30}
+    malware:
+      # noop (default, dev only) | clamav (production: scan every upload via clamd).
+      # Untrusted uploads must NOT be accepted in production while mode=noop.
+      mode: ${MALWARE_MODE:noop}
+      clamav-host: ${CLAMAV_HOST:127.0.0.1}
+      clamav-port: ${CLAMAV_PORT:3310}
+      timeout-millis: ${MALWARE_TIMEOUT_MILLIS:10000}
+      max-scan-bytes: ${MALWARE_MAX_SCAN_BYTES:26214400}
+      # reject (default, fail-closed) | allow (fail-open emergency degraded mode only).
+      on-error: ${MALWARE_ON_ERROR:reject}
   storage:
     provider: ${STORAGE_PROVIDER:local}
     local-root-path: ${STORAGE_LOCAL_ROOT:./storage/uploads}
     max-file-size-mb: 25
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:4200}
+  messaging:
+    groups:
+      # retain (default) | revoke — GROUP access once an internship ends.
+      # retain: completed interns keep history/access; only NEW adds need ACTIVE status.
+      # revoke: GROUP access additionally requires current standing (ACTIVE intern
+      #   or staff); ended members lose access but rows/history are preserved.
+      # TODO — STEG VALIDATION REQUIRED: confirm the final value with STEG policy.
+      completed-intern-access: ${GROUPS_COMPLETED_INTERN_ACCESS:retain}

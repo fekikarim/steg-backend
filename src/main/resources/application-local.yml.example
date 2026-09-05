@@ -34,3 +34,11 @@ steg:
     local-root-path: ./storage/uploads
   cors:
     allowed-origins: http://localhost:3000,http://localhost:4200
+  # Production malware scanning (ClamAV clamd daemon):
+  # malware:
+  #   mode: clamav
+  #   clamav-host: 127.0.0.1
+  #   clamav-port: 3310
+  #   timeout-millis: 10000
+  #   max-scan-bytes: 26214400
+  #   on-error: reject   # never 'allow' outside a declared emergency
