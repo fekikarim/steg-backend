@@ -10,6 +10,13 @@ import java.util.UUID;
 public interface InternshipRepository {
     List<Internship> findAll();
     Optional<Internship> findById(UUID id);
+
+    /**
+     * Pessimistic write lock for check-then-insert flows scoped to one
+     * internship (e.g. certificate generation), so concurrent requests
+     * serialize instead of racing past existence checks.
+     */
+    Optional<Internship> findByIdForUpdate(UUID id);
     Optional<Internship> findByReference(String reference);
     boolean existsByReference(String reference);
     long countByReferencePrefix(String prefix);

@@ -22,6 +22,7 @@ import tn.steg.backend.notification.domain.model.NotificationChannel;
 import tn.steg.backend.notification.domain.model.NotificationDelivery;
 import tn.steg.backend.notification.domain.model.NotificationDeliveryStatus;
 import tn.steg.backend.notification.domain.model.NotificationPriority;
+import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.notification.domain.repository.NotificationDeliveryRepository;
 import tn.steg.backend.notification.domain.repository.NotificationRepository;
 
@@ -63,6 +64,7 @@ public class NotificationService {
     private final EmailSender emailSender;
     private final PushNotificationSender pushSender;
     private final RealtimeNotifier realtimeNotifier;
+    private final AuditService auditService;
 
     @Value("${steg.notifications.mail.enabled:false}")
     private boolean mailEnabled;
@@ -168,6 +170,16 @@ public class NotificationService {
             log.warn("Notification delivery failed: notification={} channel={} recipient={} attempt={}: {}",
                     delivery.getNotification().getId(), delivery.getChannel(),
                     recipient.getId(), delivery.getAttemptCount(), e.getMessage());
+            if (delivery.getAttemptCount() >= maxAttempts) {
+                // Dead letter stays queryable AND auditable: operators can find
+                // every exhausted delivery through both the table and the log.
+                auditService.log("NOTIFICATION_DEAD_LETTER", "NotificationDelivery", delivery.getId(),
+                        null,
+                        java.util.Map.of("channel", delivery.getChannel().name(),
+                                "recipient", recipient.getId().toString(),
+                                "reason", String.valueOf(delivery.getFailureReason())),
+                        null, null);
+            }
         }
     }
 

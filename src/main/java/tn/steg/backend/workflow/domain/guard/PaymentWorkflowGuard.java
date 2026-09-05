@@ -35,10 +35,14 @@ public class PaymentWorkflowGuard implements WorkflowTransitionGuard<PaymentWork
                         "Cannot move to verification unless finance case is OPENED. Current: " + currentStatus);
             }
         } else if ("PAYMENT_APPROVED".equalsIgnoreCase(targetStepCode)) {
-            // Must have passed verification or be OPENED
-            if (currentStatus != FinanceCaseStatus.OPENED) {
+            // Phase A11: the FinanceService only requests approval from
+            // READY_FOR_DECISION, but the guard stays permissive for any
+            // non-terminal state and strictly forbids decided/closed cases.
+            if (currentStatus == FinanceCaseStatus.APPROVED
+                    || currentStatus == FinanceCaseStatus.REJECTED
+                    || currentStatus == FinanceCaseStatus.CLOSED) {
                 throw new BusinessRuleException("ILLEGAL_WORKFLOW_TRANSITION",
-                        "Cannot approve payment for closed/cancelled case. Current: " + currentStatus);
+                        "Cannot decide a payment for a case that is already decided or closed. Current: " + currentStatus);
             }
             if (decision != ApprovalDecision.APPROVED && decision != ApprovalDecision.REJECTED) {
                 throw new BusinessRuleException("INVALID_DECISION", "Payment approval requires decision APPROVED or REJECTED.");

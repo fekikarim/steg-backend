@@ -10,7 +10,9 @@ import tn.steg.backend.common.domain.event.ApplicationRejectedEvent;
 import tn.steg.backend.common.domain.event.DocumentVerifiedEvent;
 import tn.steg.backend.common.domain.event.InternshipAssignedEvent;
 import tn.steg.backend.common.domain.event.JournalEntryValidatedEvent;
+import tn.steg.backend.common.domain.event.CertificateAvailableEvent;
 import tn.steg.backend.common.domain.event.NewPrivateMessageEvent;
+import tn.steg.backend.common.domain.event.PaymentApprovedEvent;
 import tn.steg.backend.common.domain.event.TaskAssignedEvent;
 import tn.steg.backend.notification.domain.model.NotificationPriority;
 
@@ -105,6 +107,28 @@ public class NotificationEventListener {
                 "Your journal entry '" + event.entryTitle() + "' has been validated by your supervisor.",
                 NotificationPriority.NORMAL,
                 "JournalEntry", event.entryId(),
+                List.of(event.internUserId()), event.actorId());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onPaymentApproved(PaymentApprovedEvent event) {
+        notificationService.dispatch(
+                "Payment approved",
+                "The payment of " + event.amount() + " TND (" + event.paidMonths()
+                        + " month(s)) for finance case " + event.financeCaseReference()
+                        + " has been approved. The receipt is available.",
+                NotificationPriority.HIGH,
+                "FinanceCase", event.financeCaseId(),
+                List.of(event.supervisorUserId()), event.actorId());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onCertificateAvailable(CertificateAvailableEvent event) {
+        notificationService.dispatch(
+                "Certificate available",
+                "Your internship certificate " + event.certificateReference() + " is available for download.",
+                NotificationPriority.HIGH,
+                "Certificate", event.certificateId(),
                 List.of(event.internUserId()), event.actorId());
     }
 

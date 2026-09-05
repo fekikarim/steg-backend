@@ -1,0 +1,38 @@
+# STEG payment receipt wording — PROPOSED professional template.
+# TODO — VALIDATION OFFICIELLE STEG REQUISE : le contenu définitif, les mentions
+# comptables, les références obligatoires, la signature, le cachet, le lieu de
+# délivrance et la présentation graphique doivent être validés par STEG.
+# Sections: [TITLE], [SUBTITLE], [INTRO], [DETAILS] ("Label : {{key}}" rows),
+# [BODY] (blank line = paragraph break), [FOOTER]. Placeholders {{name}} are
+# substituted server-side; unknown keys are left as-is.
+
+[TITLE]
+REÇU DE PAIEMENT D'INDEMNITÉ DE STAGE
+
+[SUBTITLE]
+Société Tunisienne de l'Électricité et du Gaz (STEG) — Direction Financière
+
+[INTRO]
+Nous soussignés, représentants de la Société Tunisienne de l'Électricité et du Gaz (STEG), attestons que le paiement de l'indemnité de stage correspondant au dossier suivant a été approuvé conformément au circuit administratif et financier enregistré dans le système :
+
+[DETAILS]
+Bénéficiaire : {{internFullName}}
+CIN / Identifiant national : {{nationalId}}
+Établissement universitaire : {{university}}
+Type de stage : {{internshipType}}
+Période de stage : {{internshipPeriod}}
+Nombre de mois indemnisables : {{payableMonths}}
+Montant approuvé : {{approvedAmount}} {{currency}}
+Référence du dossier financier : {{financeReference}}
+Référence du paiement : {{paymentReference}}
+Date de décision : {{decisionDate}}
+Date de génération du reçu : {{generationDate}}
+
+[BODY]
+Le présent reçu constitue une preuve documentaire du paiement approuvé dans le cadre du dossier de stage concerné. Il ne constitue pas une attestation de stage et ne remplace aucun justificatif bancaire ou comptable éventuellement exigé par les procédures internes de la STEG.
+
+Signature et cachet du service compétent : ____________________
+
+[FOOTER]
+Document généré par la plateforme STEG le {{generationDate}} — Référence : {{paymentReference}}.
+TODO — VALIDATION OFFICIELLE STEG REQUISE : le contenu définitif, les mentions comptables, les références obligatoires, la signature, le cachet, le lieu de délivrance et la présentation graphique doivent être validés par STEG.

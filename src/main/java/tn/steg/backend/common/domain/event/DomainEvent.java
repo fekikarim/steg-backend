@@ -20,7 +20,9 @@ public sealed interface DomainEvent
         DocumentVerifiedEvent,
         TaskAssignedEvent,
         JournalEntryValidatedEvent,
-        NewPrivateMessageEvent {
+        NewPrivateMessageEvent,
+        PaymentApprovedEvent,
+        CertificateAvailableEvent {
 
     /** Unique id of this event occurrence (idempotency/tracing). */
     UUID eventId();

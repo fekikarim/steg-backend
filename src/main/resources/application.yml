@@ -24,7 +24,9 @@ spring:
     baseline-version: 0
     locations: classpath:db/migration
 
-  # Transactional email transport (used only when notifications.mail.enabled=true)
+  # Transactional email transport (used only when notifications.mail.enabled=true).
+  # Credentials come exclusively from environment/secret management and are
+  # never logged (the startup validator below only checks presence/shape).
   mail:
     host: ${SMTP_HOST:localhost}
     port: ${SMTP_PORT:1025}
@@ -36,6 +38,9 @@ spring:
           auth: ${SMTP_AUTH:false}
           starttls:
             enable: ${SMTP_STARTTLS:false}
+          connectiontimeout: ${SMTP_CONNECTION_TIMEOUT_MILLIS:5000}
+          timeout: ${SMTP_READ_TIMEOUT_MILLIS:10000}
+          writetimeout: ${SMTP_WRITE_TIMEOUT_MILLIS:10000}
 
 
 # Management & Observability (Actuator)
@@ -109,3 +114,21 @@ steg:
       max-attempts: ${NOTIFICATIONS_RETRY_MAX_ATTEMPTS:5}
       base-backoff-seconds: ${NOTIFICATIONS_RETRY_BASE_BACKOFF_SECONDS:60}
       max-backoff-seconds: ${NOTIFICATIONS_RETRY_MAX_BACKOFF_SECONDS:3600}
+  finance:
+    # Deterministic payment policy defaults (requirements: 50 TND / completed
+    # month, max 3 payable months, max 150 TND). Externalized, never magic
+    # numbers in code; changing them alters future calculations only.
+    rate-per-month: ${FINANCE_RATE_PER_MONTH:50.00}
+    max-payable-months: ${FINANCE_MAX_PAYABLE_MONTHS:3}
+    max-amount: ${FINANCE_MAX_AMOUNT:150.00}
+    currency: ${FINANCE_CURRENCY:TND}
+  documents:
+    certificate:
+      template-code: ${CERTIFICATE_TEMPLATE_CODE:STEG-INTERNSHIP-CERTIFICATE}
+      template-version: ${CERTIFICATE_TEMPLATE_VERSION:1}
+    receipt:
+      template-code: ${PAYMENT_RECEIPT_TEMPLATE_CODE:STEG-PAYMENT-RECEIPT}
+      template-version: ${PAYMENT_RECEIPT_TEMPLATE_VERSION:1}
+    # City printed as "Fait à ..." on official documents.
+    # TODO — STEG VALIDATION REQUIRED: confirm the official place of issuance.
+    generation-location: ${DOCUMENTS_GENERATION_LOCATION:Tunis}

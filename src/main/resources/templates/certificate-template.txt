@@ -1,0 +1,38 @@
+# STEG internship certificate wording — PROPOSED professional template.
+# TODO — VALIDATION OFFICIELLE STEG REQUISE : le contenu définitif, la formulation
+# institutionnelle, les mentions obligatoires, la signature, le cachet, le lieu de
+# délivrance et la présentation graphique doivent être validés par STEG.
+# Sections: [TITLE], [SUBTITLE], [INTRO], [DETAILS] ("Label : {{key}}" rows),
+# [BODY] (blank line = paragraph break), [FOOTER]. Placeholders {{name}} are
+# substituted server-side; unknown keys are left as-is.
+
+[TITLE]
+ATTESTATION DE STAGE
+
+[SUBTITLE]
+Société Tunisienne de l'Électricité et du Gaz (STEG)
+
+[INTRO]
+Nous soussignés, représentants de la Société Tunisienne de l'Électricité et du Gaz (STEG), attestons que :
+
+[DETAILS]
+Nom et prénom : {{internFullName}}
+CIN / Identifiant national : {{nationalId}}
+Type de stage : {{internshipType}}
+Établissement universitaire : {{university}}
+Niveau d'études : {{educationLevel}}
+Département d'accueil : {{department}}
+Encadrant : {{supervisorFullName}}
+Sujet du stage : {{subject}}
+Période du stage : {{internshipPeriod}}
+Référence du stage : {{internshipReference}}
+Référence de l'attestation : {{certificateReference}}
+
+[BODY]
+Le présent document est délivré à la demande de l'intéressé(e), pour servir et valoir ce que de droit, sous réserve de la validation administrative des informations par les services compétents de la STEG.
+
+Signature et cachet du service compétent : ____________________
+
+[FOOTER]
+Fait à {{generationLocation}}, le {{generationDate}}. — Référence : {{certificateReference}}.
+TODO — VALIDATION OFFICIELLE STEG REQUISE : le contenu définitif, la formulation institutionnelle, les mentions obligatoires, la signature, le cachet, le lieu de délivrance et la présentation graphique doivent être validés par STEG.

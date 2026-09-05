@@ -49,9 +49,17 @@ public class PaymentCalculation extends BaseEntity {
     @Column(name = "calculated_at", nullable = false)
     private Instant calculatedAt;
 
+    /**
+     * Snapshot version within the case (1, 2, ...). Recalculation appends a
+     * new row with an incremented sequence — rows are never updated or
+     * deleted, so every decided amount stays traceable to its snapshot.
+     */
+    @Column(name = "calculation_sequence", nullable = false)
+    private Integer calculationSequence = 1;
+
     public PaymentCalculation(FinanceCase financeCase, Integer completedMonths, Integer payableMonths,
                               BigDecimal ratePerMonth, BigDecimal calculatedAmount, BigDecimal cappedAmount,
-                              Boolean capApplied, String currencyCode) {
+                              Boolean capApplied, String currencyCode, Integer calculationSequence) {
         this.financeCase = financeCase;
         this.completedMonths = completedMonths;
         this.payableMonths = payableMonths;
@@ -60,6 +68,7 @@ public class PaymentCalculation extends BaseEntity {
         this.cappedAmount = cappedAmount;
         this.capApplied = capApplied;
         this.currencyCode = currencyCode;
+        this.calculationSequence = calculationSequence;
         this.calculatedAt = Instant.now();
     }
 }

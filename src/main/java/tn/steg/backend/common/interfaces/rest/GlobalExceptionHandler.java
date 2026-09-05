@@ -125,6 +125,23 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(envelope);
     }
 
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorEnvelope> handleDataIntegrityViolationException(
+            org.springframework.dao.DataIntegrityViolationException ex, HttpServletRequest request) {
+        // Backstop for residual unique-constraint races (e.g. count-based reference
+        // allocation under concurrency): a safe 409 with no internals leaked.
+        // Primary paths pre-check and return precise codes (e.g. CERTIFICATE_ALREADY_EXISTS).
+        ErrorEnvelope envelope = buildEnvelope(
+                HttpStatus.CONFLICT,
+                "Concurrent Modification Conflict",
+                "The request conflicts with a concurrent change (duplicate reference or record). Please refresh and retry.",
+                request,
+                null
+        );
+        log.warn("Data integrity conflict on path {}: {}", request.getRequestURI(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(envelope);
+    }
+
     @ExceptionHandler(OptimisticLockingFailureException.class)
     public ResponseEntity<ErrorEnvelope> handleOptimisticLockException(OptimisticLockingFailureException ex, HttpServletRequest request) {
         ErrorEnvelope envelope = buildEnvelope(

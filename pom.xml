@@ -96,6 +96,18 @@
             <artifactId>spring-ai-tika-document-reader</artifactId>
         </dependency>
 
+        <!-- Apache PDFBox for server-side PDF generation (Phase A11: certificates,
+             payment receipts). Chosen over OpenPDF because: Apache-2.0 licensed,
+             already proven on this stack's classpath (transitively via the AI PDF
+             reader), actively maintained 3.x line, and sufficient for programmatic
+             official documents with embedded branding images. Pinned explicitly
+             instead of relying on the transitive copy. -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.7</version>
+        </dependency>
+
         <!-- JJWT for JWT Authentication -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>

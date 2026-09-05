@@ -91,6 +91,25 @@ public class WorkflowService {
     }
 
     /**
+     * Creates and persists a new PaymentWorkflowInstance for the given finance case.
+     * Sets the initial step to CASE_OPENED and marks the instance as RUNNING.
+     */
+    @Transactional
+    public PaymentWorkflowInstance spawnPaymentWorkflow(tn.steg.backend.finance.domain.model.FinanceCase financeCase) {
+        WorkflowDefinition def = requireDefinition(DEF_CODE_PAYMENT);
+        WorkflowStepDefinition initialStep = requireStep(def.getId(), "CASE_OPENED");
+
+        PaymentWorkflowInstance instance = new PaymentWorkflowInstance(def, financeCase);
+        instance.setCurrentStep(initialStep);
+        instance.setStatus(WorkflowStatus.RUNNING);
+
+        instance = (PaymentWorkflowInstance) instanceRepository.save(instance);
+        log.info("Spawned PaymentWorkflowInstance id={} for finance case ref={}",
+                instance.getId(), financeCase.getReference());
+        return instance;
+    }
+
+    /**
      * Creates and persists a new InternshipWorkflowInstance for the given internship.
      * Sets the initial step to PLANNED and marks the instance as RUNNING.
      */
@@ -219,6 +238,48 @@ public class WorkflowService {
         return WorkflowActionResponse.from(action);
     }
 
+    /**
+     * Executes a workflow transition on a PaymentWorkflowInstance.
+     *
+     * <p>Phase A11 routes every FinanceCase status change through here so the
+     * payment pipeline keeps the same immutable WorkflowAction history as the
+     * other lifecycles. The FinanceCase status itself is owned by
+     * {@code FinanceService}; this method only advances the workflow instance
+     * and records the action (both in the caller's transaction).
+     *
+     * @param financeCaseId the UUID of the FinanceCase
+     * @param request       transition parameters
+     * @param actor         the authenticated user performing the action
+     * @return the recorded WorkflowAction as a DTO
+     */
+    @Transactional
+    public WorkflowActionResponse transitionPayment(UUID financeCaseId,
+                                                    WorkflowTransitionRequest request,
+                                                    UserPrincipal actor) {
+        PaymentWorkflowInstance instance = instanceRepository
+                .findPaymentInstanceByFinanceCaseId(financeCaseId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No active workflow found for finance case: " + financeCaseId));
+
+        WorkflowStepDefinition targetStep = requireStep(instance.getDefinition().getId(), request.targetStepCode());
+        User performer = requireUser(actor.getId());
+
+        resolveGuard(PaymentWorkflowInstance.class).validateTransition(instance, request.targetStepCode(),
+                request.actionType(), request.decision());
+
+        instance.setCurrentStep(targetStep);
+        if ("PAYMENT_APPROVED".equalsIgnoreCase(request.targetStepCode())) {
+            instance.setStatus(WorkflowStatus.COMPLETED);
+            instance.setCompletedAt(Instant.now());
+        }
+        instanceRepository.save(instance);
+
+        WorkflowAction action = persistAction(instance, targetStep, performer, request);
+        log.info("PaymentWorkflow transition: financeCaseId={} → step={} decision={} by actor={}",
+                financeCaseId, request.targetStepCode(), request.decision(), actor.getId());
+        return WorkflowActionResponse.from(action);
+    }
+
     // =========================================================================
     // Query methods
     // =========================================================================
@@ -232,6 +293,18 @@ public class WorkflowService {
                 .findApplicationInstanceByApplicationId(applicationId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "No workflow found for application: " + applicationId));
+        return WorkflowInstanceResponse.from(instance);
+    }
+
+    /**
+     * Returns the current workflow state for a finance case.
+     */
+    @Transactional(readOnly = true)
+    public WorkflowInstanceResponse getPaymentWorkflowState(UUID financeCaseId) {
+        PaymentWorkflowInstance instance = instanceRepository
+                .findPaymentInstanceByFinanceCaseId(financeCaseId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No workflow found for finance case: " + financeCaseId));
         return WorkflowInstanceResponse.from(instance);
     }
 
