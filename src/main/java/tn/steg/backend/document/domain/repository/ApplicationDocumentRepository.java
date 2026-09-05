@@ -8,6 +8,7 @@ import java.util.UUID;
 
 public interface ApplicationDocumentRepository {
     List<ApplicationDocument> findByApplicationId(UUID applicationId);
+    List<ApplicationDocument> findByApplicationIdAndDocumentRestrictedAccessFalse(UUID applicationId);
     Optional<ApplicationDocument> findByApplicationIdAndDocumentId(UUID applicationId, UUID documentId);
     ApplicationDocument save(ApplicationDocument applicationDocument);
 }

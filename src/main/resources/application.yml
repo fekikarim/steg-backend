@@ -132,3 +132,12 @@ steg:
     # City printed as "Fait à ..." on official documents.
     # TODO — STEG VALIDATION REQUIRED: confirm the official place of issuance.
     generation-location: ${DOCUMENTS_GENERATION_LOCATION:Tunis}
+  ai:
+    enabled: ${AI_ENABLED:false}
+    provider: ${AI_PROVIDER:gemini}
+    api-key: ${AI_API_KEY:${GEMINI_API_KEY:}}
+    model: ${AI_MODEL:gemini-3.8-flash}
+    base-url: ${AI_BASE_URL:https://generativelanguage.googleapis.com}
+    timeout-ms: ${AI_TIMEOUT_MS:10000}
+    max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:2048}
+    temperature: ${AI_TEMPERATURE:0.2}

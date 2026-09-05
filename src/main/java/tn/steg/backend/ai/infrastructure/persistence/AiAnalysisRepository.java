@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.UUID;
 
 @Repository
-public interface AiAnalysisRepository extends JpaRepository<AiAnalysis, UUID> {
+public interface AiAnalysisRepository extends JpaRepository<AiAnalysis, UUID>,
+        tn.steg.backend.ai.domain.repository.AiAnalysisRepository {
     List<AiAnalysis> findByRelatedEntityTypeAndRelatedEntityId(String relatedEntityType, UUID relatedEntityId);
 }

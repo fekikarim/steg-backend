@@ -8,6 +8,7 @@ import java.util.UUID;
 
 public interface FinanceCaseDocumentRepository {
     List<FinanceCaseDocument> findByFinanceCaseId(UUID financeCaseId);
+    List<FinanceCaseDocument> findByFinanceCaseIdAndDocumentRestrictedAccessFalse(UUID financeCaseId);
     Optional<FinanceCaseDocument> findByFinanceCaseIdAndDocumentId(UUID financeCaseId, UUID documentId);
     FinanceCaseDocument save(FinanceCaseDocument financeCaseDocument);
 }

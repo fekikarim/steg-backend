@@ -12,5 +12,6 @@ import java.util.UUID;
 public interface FinanceCaseDocumentRepository extends JpaRepository<FinanceCaseDocument, UUID>,
         tn.steg.backend.document.domain.repository.FinanceCaseDocumentRepository {
     List<FinanceCaseDocument> findByFinanceCaseId(UUID financeCaseId);
+    List<FinanceCaseDocument> findByFinanceCaseIdAndDocumentRestrictedAccessFalse(UUID financeCaseId);
     Optional<FinanceCaseDocument> findByFinanceCaseIdAndDocumentId(UUID financeCaseId, UUID documentId);
 }
