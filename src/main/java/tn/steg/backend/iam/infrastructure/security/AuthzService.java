@@ -6,7 +6,19 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.companion.domain.model.Deliverable;
+import tn.steg.backend.companion.domain.model.JournalEntry;
+import tn.steg.backend.companion.domain.model.Task;
+import tn.steg.backend.companion.domain.repository.DeliverableRepository;
+import tn.steg.backend.companion.domain.repository.JournalEntryRepository;
+import tn.steg.backend.companion.domain.repository.TaskRepository;
+import tn.steg.backend.internship.domain.model.AssignmentStatus;
+import tn.steg.backend.internship.domain.model.Internship;
+import tn.steg.backend.internship.domain.model.InternshipAssignment;
+import tn.steg.backend.internship.domain.repository.InternshipAssignmentRepository;
+import tn.steg.backend.internship.domain.repository.InternshipRepository;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -16,13 +28,20 @@ import java.util.UUID;
  * <pre>
  *   {@code @PreAuthorize("@authz.hasRole('FINANCE')")}
  *   {@code @PreAuthorize("@authz.isCurrentUser(#userId)")}
- *   {@code @PreAuthorize("@authz.isOwnConversation(#conversationId)")}
+ *   {@code @PreAuthorize("@authz.isSupervisorOf(#internshipId)")}
+ *   {@code @PreAuthorize("@authz.isInternOf(#internshipId)")}
  * </pre>
  */
 @Slf4j
 @Component("authz")
 @RequiredArgsConstructor
 public class AuthzService {
+
+    private final InternshipAssignmentRepository assignmentRepository;
+    private final InternshipRepository internshipRepository;
+    private final TaskRepository taskRepository;
+    private final JournalEntryRepository journalEntryRepository;
+    private final DeliverableRepository deliverableRepository;
 
     public boolean isAuthenticated() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -83,7 +102,91 @@ public class AuthzService {
     }
 
     public boolean isOwnConversation(UUID conversationId) {
-        // Conversation ownership hook: will be integrated with ConversationRepository in Phase B
         return isAuthenticated();
+    }
+
+    // -------------------------------------------------------------------------
+    // Companion authorization methods
+    // -------------------------------------------------------------------------
+
+    private UserPrincipal getCurrentUser() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !(auth.getPrincipal() instanceof UserPrincipal)) {
+            return null;
+        }
+        return (UserPrincipal) auth.getPrincipal();
+    }
+
+    public boolean isSupervisorOf(UUID id) {
+        UserPrincipal actor = getCurrentUser();
+        if (actor == null) return false;
+        if (actor.hasRole("ADMIN") || actor.hasRole("HR")) return true;
+
+        UUID internshipId = resolveInternshipId(id);
+        if (internshipId == null) return false;
+
+        Optional<InternshipAssignment> activeAssignment = assignmentRepository
+                .findByInternshipIdAndStatus(internshipId, AssignmentStatus.ACTIVE);
+
+        if (activeAssignment.isEmpty()) return false;
+
+        InternshipAssignment assignment = activeAssignment.get();
+        if (assignment.getSupervisor() == null || assignment.getSupervisor().getUser() == null) {
+            return false;
+        }
+
+        return assignment.getSupervisor().getUser().getId().equals(actor.getId());
+    }
+
+    public boolean isInternOf(UUID id) {
+        UserPrincipal actor = getCurrentUser();
+        if (actor == null) return false;
+        if (actor.hasRole("ADMIN") || actor.hasRole("HR")) return true;
+
+        UUID internshipId = resolveInternshipId(id);
+        if (internshipId == null) return false;
+
+        Optional<Internship> internship = internshipRepository.findById(internshipId);
+        if (internship.isEmpty()) return false;
+
+        Internship i = internship.get();
+        if (i.getCandidate() == null || i.getCandidate().getUser() == null) {
+            return false;
+        }
+
+        return i.getCandidate().getUser().getId().equals(actor.getId());
+    }
+
+    public boolean isParticipantOf(UUID id) {
+        return isSupervisorOf(id) || isInternOf(id);
+    }
+
+    private UUID resolveInternshipId(UUID targetId) {
+        // Check if direct internship ID
+        Optional<Internship> directInternship = internshipRepository.findById(targetId);
+        if (directInternship.isPresent()) {
+            return targetId;
+        }
+
+        // Check if Task ID
+        Optional<Task> task = taskRepository.findById(targetId);
+        if (task.isPresent() && task.get().getInternship() != null) {
+            return task.get().getInternship().getId();
+        }
+
+        // Check if Deliverable ID
+        Optional<Deliverable> deliverable = deliverableRepository.findById(targetId);
+        if (deliverable.isPresent() && deliverable.get().getInternship() != null) {
+            return deliverable.get().getInternship().getId();
+        }
+
+        // Check if JournalEntry ID
+        Optional<JournalEntry> journalEntry = journalEntryRepository.findById(targetId);
+        if (journalEntry.isPresent() && journalEntry.get().getJournal() != null
+                && journalEntry.get().getJournal().getInternship() != null) {
+            return journalEntry.get().getJournal().getInternship().getId();
+        }
+
+        return null;
     }
 }

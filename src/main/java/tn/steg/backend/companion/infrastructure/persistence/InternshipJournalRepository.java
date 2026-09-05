@@ -8,6 +8,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface InternshipJournalRepository extends JpaRepository<InternshipJournal, UUID> {
+public interface InternshipJournalRepository extends JpaRepository<InternshipJournal, UUID>, tn.steg.backend.companion.domain.repository.InternshipJournalRepository {
     Optional<InternshipJournal> findByInternshipId(UUID internshipId);
 }

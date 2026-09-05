@@ -43,6 +43,7 @@ public class InternshipService {
     private final CandidateRepository candidateRepository;
     private final DepartmentRepository departmentRepository;
     private final EmployeeRepository employeeRepository;
+    private final tn.steg.backend.companion.domain.repository.InternshipJournalRepository journalRepository;
 
     /** Lazy injection to avoid circular dependency with WorkflowService. */
     @Lazy
@@ -57,6 +58,7 @@ public class InternshipService {
                               CandidateRepository candidateRepository,
                               DepartmentRepository departmentRepository,
                               EmployeeRepository employeeRepository,
+                              tn.steg.backend.companion.domain.repository.InternshipJournalRepository journalRepository,
                               @Lazy WorkflowService workflowService) {
         this.internshipRepository  = internshipRepository;
         this.assignmentRepository  = assignmentRepository;
@@ -64,6 +66,7 @@ public class InternshipService {
         this.candidateRepository   = candidateRepository;
         this.departmentRepository  = departmentRepository;
         this.employeeRepository    = employeeRepository;
+        this.journalRepository     = journalRepository;
         this.workflowService       = workflowService;
     }
 
@@ -106,6 +109,7 @@ public class InternshipService {
         internship.setPlannedAt(Instant.now());
 
         internship = internshipRepository.save(internship);
+        journalRepository.save(new tn.steg.backend.companion.domain.model.InternshipJournal(internship));
         log.info("Internship created from application: ref={}, candidate={}", reference, application.getCandidate().getId());
 
         // Phase A5: spawn workflow instance so PLANNED → ACTIVE → COMPLETED transitions
@@ -144,6 +148,7 @@ public class InternshipService {
         internship.setPlannedAt(Instant.now());
 
         internship = internshipRepository.save(internship);
+        journalRepository.save(new tn.steg.backend.companion.domain.model.InternshipJournal(internship));
         log.info("Internship created manually: ref={}, candidate={}", reference, candidate.getId());
 
         // Phase A5: spawn workflow instance for manually created internships too
