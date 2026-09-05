@@ -2,7 +2,9 @@ package tn.steg.backend.document.application;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import tn.steg.backend.common.domain.event.DocumentVerifiedEvent;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import tn.steg.backend.application.domain.model.InternshipApplication;
@@ -53,6 +55,9 @@ public class DocumentService {
     private final UserRepository userRepository;
     private final EmployeeRepository employeeRepository;
     private final AuditService auditService;
+
+    /** Business facts for cross-cutting concerns; never a dependency on consumers (Phase A10). */
+    private final ApplicationEventPublisher eventPublisher;
 
     // -------------------------------------------------------------------------
     // Document Upload & Management
@@ -251,6 +256,15 @@ public class DocumentService {
 
         appDoc = applicationDocumentRepository.save(appDoc);
         log.info("Application document {} for app {} verified with status {}", documentId, applicationId, request.status());
+
+        // Phase A10: notify the candidate (consumed AFTER_COMMIT).
+        eventPublisher.publishEvent(new DocumentVerifiedEvent(
+                applicationId,
+                documentId,
+                appDoc.getDocument().getType().name(),
+                request.status().name(),
+                appDoc.getApplication().getCandidate().getUser().getId(),
+                actor.getId()));
 
         DocumentVersion lv = documentVersionRepository.findTopByDocumentIdOrderByVersionNumberDesc(appDoc.getDocument().getId()).orElse(null);
         FileAsset fa = lv != null ? lv.getFile() : null;

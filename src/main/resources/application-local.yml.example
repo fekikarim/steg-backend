@@ -34,6 +34,21 @@ steg:
     local-root-path: ./storage/uploads
   cors:
     allowed-origins: http://localhost:3000,http://localhost:4200
+  notifications:
+    mail:
+      enabled: false   # set true + SMTP below to receive EMAIL deliveries (e.g. Maildev on :1025)
+      from: no-reply@steg.tn
+    # retry:
+    #   fixed-delay-millis: 60000
+    #   max-attempts: 5
+
+#  spring:
+#    mail:
+#      host: localhost
+#      port: 1025
+#      properties:
+#        mail.smtp.auth: false
+#        mail.smtp.starttls.enable: false
   # Production malware scanning (ClamAV clamd daemon):
   # malware:
   #   mode: clamav

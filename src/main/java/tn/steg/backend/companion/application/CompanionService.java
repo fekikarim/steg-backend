@@ -2,11 +2,14 @@ package tn.steg.backend.companion.application;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import tn.steg.backend.common.domain.event.JournalEntryValidatedEvent;
+import tn.steg.backend.common.domain.event.TaskAssignedEvent;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
@@ -61,6 +64,9 @@ public class CompanionService {
     private final DocumentValidationService documentValidationService;
     private final MalwareScanner malwareScanner;
 
+    /** Business facts for cross-cutting concerns; never a dependency on consumers (Phase A10). */
+    private final ApplicationEventPublisher eventPublisher;
+
     // -------------------------------------------------------------------------
     // Tasks
     // -------------------------------------------------------------------------
@@ -87,6 +93,12 @@ public class CompanionService {
 
         task = taskRepository.save(task);
         log.info("Task created: id={}, internship={}, creator={}", task.getId(), internshipId, creator.getId());
+
+        // Phase A10: notify the assignee (not for self-assigned tasks).
+        if (assignedTo != null && !assignedTo.getId().equals(creator.getId())) {
+            eventPublisher.publishEvent(new TaskAssignedEvent(
+                    task.getId(), task.getTitle(), internshipId, assignedTo.getId(), actor.getId()));
+        }
         return TaskResponse.from(task);
     }
 
@@ -217,6 +229,12 @@ public class CompanionService {
         entry.setValidatedAt(Instant.now());
         entry = journalEntryRepository.save(entry);
         log.info("Journal entry validated: id={}, validatedBy={}", entry.getId(), supervisor != null ? supervisor.getId() : null);
+
+        // Phase A10: notify the intern author (consumed AFTER_COMMIT).
+        eventPublisher.publishEvent(new JournalEntryValidatedEvent(
+                entry.getId(), entry.getTitle(),
+                entry.getJournal().getInternship().getId(),
+                entry.getAuthor().getId(), actor.getId()));
         return JournalEntryResponse.from(entry);
     }
 

@@ -3,6 +3,7 @@ package tn.steg.backend.messaging.application;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
@@ -11,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.candidate.domain.repository.CandidateRepository;
+import tn.steg.backend.common.domain.event.NewPrivateMessageEvent;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
@@ -101,6 +103,9 @@ public class MessagingService {
     private final DocumentValidationService documentValidationService;
     private final MalwareScanner malwareScanner;
     private final AuditService auditService;
+
+    /** Business facts for cross-cutting concerns; never a dependency on consumers (Phase A10). */
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * GROUP access policy once an internship ends ({@code retain} default |
@@ -385,6 +390,19 @@ public class MessagingService {
 
         auditService.log("MESSAGE_SENT", "Message", message.getId(), null, null, actor.getId(), null);
         log.debug("Message sent: id={} conv={} seq={} sender={}", message.getId(), conversationId, nextSeq, actor.getId());
+
+        // Phase A10: notify the other active members (consumed AFTER_COMMIT,
+        // so no alert fires if this transaction rolls back).
+        List<UUID> recipientIds = memberRepository.findActiveByConversationId(conversationId).stream()
+                .map(member -> member.getUser().getId())
+                .filter(userId -> !userId.equals(actor.getId()))
+                .toList();
+        if (!recipientIds.isEmpty()) {
+            eventPublisher.publishEvent(new NewPrivateMessageEvent(
+                    conversationId, message.getId(), nextSeq,
+                    actor.getId(), actor.getEmail(), recipientIds,
+                    conversation.getType().name()));
+        }
         return MessageResponse.from(message, List.of());
     }
 

@@ -2,9 +2,11 @@ package tn.steg.backend.internship.application;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tn.steg.backend.common.domain.event.InternshipAssignedEvent;
 import tn.steg.backend.application.domain.model.ApplicationStatus;
 import tn.steg.backend.application.domain.model.InternshipApplication;
 import tn.steg.backend.application.domain.repository.InternshipApplicationRepository;
@@ -54,6 +56,9 @@ public class InternshipService {
     @Lazy
     private final MessagingService messagingService;
 
+    /** Business facts for cross-cutting concerns; never a dependency on consumers (Phase A10). */
+    private final ApplicationEventPublisher eventPublisher;
+
     private final InternshipClassificationService classificationService = new InternshipClassificationService();
     private final InternshipEligibilityService eligibilityService = new InternshipEligibilityService();
 
@@ -65,7 +70,8 @@ public class InternshipService {
                                EmployeeRepository employeeRepository,
                                tn.steg.backend.companion.domain.repository.InternshipJournalRepository journalRepository,
                                @Lazy WorkflowService workflowService,
-                               @Lazy MessagingService messagingService) {
+                               @Lazy MessagingService messagingService,
+                               ApplicationEventPublisher eventPublisher) {
         this.internshipRepository  = internshipRepository;
         this.assignmentRepository  = assignmentRepository;
         this.applicationRepository = applicationRepository;
@@ -75,6 +81,7 @@ public class InternshipService {
         this.journalRepository     = journalRepository;
         this.workflowService       = workflowService;
         this.messagingService      = messagingService;
+        this.eventPublisher        = eventPublisher;
     }
 
     // -------------------------------------------------------------------------
@@ -272,6 +279,18 @@ public class InternshipService {
         } catch (Exception e) {
             log.error("Failed to ensure private thread for internship {}: {}",
                     internship.getReference(), e.getMessage());
+        }
+
+        // Phase A10: notify intern + supervisor (consumed AFTER_COMMIT).
+        if (internship.getCandidate() != null && internship.getCandidate().getUser() != null
+                && supervisor.getUser() != null) {
+            eventPublisher.publishEvent(new InternshipAssignedEvent(
+                    internship.getId(),
+                    internship.getReference(),
+                    internship.getCandidate().getUser().getId(),
+                    supervisor.getUser().getId(),
+                    destination.getName(),
+                    actor.getId()));
         }
 
         return InternshipAssignmentResponse.from(newAssignment);

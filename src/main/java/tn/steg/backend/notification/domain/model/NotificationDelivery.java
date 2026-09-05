@@ -51,6 +51,17 @@ public class NotificationDelivery extends BaseEntity {
     @Column(name = "failure_reason", columnDefinition = "TEXT")
     private String failureReason;
 
+    /**
+     * Bounded retry bookkeeping (Phase A10): incremented on every failed
+     * attempt; the sweep stops retrying at {@code maxAttempts} (the row stays
+     * FAILED — visible, never silently dropped).
+     */
+    @Column(name = "attempt_count", nullable = false)
+    private Integer attemptCount = 0;
+
+    @Column(name = "next_retry_at")
+    private Instant nextRetryAt;
+
     public NotificationDelivery(Notification notification, User recipient, NotificationChannel channel) {
         this.notification = notification;
         this.recipient = recipient;

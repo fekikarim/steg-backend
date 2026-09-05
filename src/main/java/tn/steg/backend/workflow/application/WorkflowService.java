@@ -2,10 +2,13 @@ package tn.steg.backend.workflow.application;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tn.steg.backend.application.domain.model.ApplicationStatus;
 import tn.steg.backend.application.domain.model.InternshipApplication;
+import tn.steg.backend.common.domain.event.ApplicationAcceptedEvent;
+import tn.steg.backend.common.domain.event.ApplicationRejectedEvent;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
@@ -55,6 +58,10 @@ public class WorkflowService {
     private final WorkflowInstanceRepository         instanceRepository;
     private final WorkflowActionRepository           actionRepository;
     private final UserRepository                     userRepository;
+
+    /** Business facts for cross-cutting concerns (notifications); the workflow
+     * module never depends on those consumers (Phase A10). */
+    private final ApplicationEventPublisher          eventPublisher;
 
     /** All registered guards — Spring injects every bean implementing this interface. */
     @SuppressWarnings("rawtypes")
@@ -155,6 +162,20 @@ public class WorkflowService {
         WorkflowAction action = persistAction(instance, targetStep, performer, request);
         log.info("ApplicationWorkflow transition: appId={} → step={} decision={} by actor={}",
                 applicationId, request.targetStepCode(), request.decision(), actor.getId());
+
+        // Phase A10: notify the candidate on final accept/reject (consumed
+        // AFTER_COMMIT, so no alert fires if this transaction rolls back).
+        if ("FINAL_DECISION".equalsIgnoreCase(request.targetStepCode())) {
+            InternshipApplication decided = instance.getApplication();
+            UUID candidateUserId = decided.getCandidate().getUser().getId();
+            if (request.decision() == ApprovalDecision.APPROVED) {
+                eventPublisher.publishEvent(new ApplicationAcceptedEvent(
+                        decided.getId(), decided.getReference(), candidateUserId, actor.getId()));
+            } else if (request.decision() == ApprovalDecision.REJECTED) {
+                eventPublisher.publishEvent(new ApplicationRejectedEvent(
+                        decided.getId(), decided.getReference(), candidateUserId, actor.getId(), request.comment()));
+            }
+        }
         return WorkflowActionResponse.from(action);
     }
 

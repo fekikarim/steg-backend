@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.companion.domain.model.Deliverable;
 import tn.steg.backend.companion.domain.model.JournalEntry;
@@ -34,6 +35,11 @@ import java.util.UUID;
  *   {@code @PreAuthorize("@authz.isSupervisorOf(#internshipId)")}
  *   {@code @PreAuthorize("@authz.isInternOf(#internshipId)")}
  * </pre>
+ *
+ * <p>Check methods run in short read-only transactions: {@code @PreAuthorize}
+ * evaluates before any service transaction opens, so lazy association
+ * traversal here needs its own session (otherwise LazyInitializationException
+ * outside tests, which always run inside one).
  */
 @Slf4j
 @Component("authz")
@@ -115,6 +121,7 @@ public class AuthzService {
      * inside {@code MessagingService} (so relinquishing access via leave keeps
      * working); every other messaging operation re-checks there.
      */
+    @Transactional(readOnly = true)
     public boolean isOwnConversation(UUID conversationId) {
         if (conversationId == null || !isAuthenticated()) {
             return false;
@@ -152,6 +159,7 @@ public class AuthzService {
         return (UserPrincipal) auth.getPrincipal();
     }
 
+    @Transactional(readOnly = true)
     public boolean isSupervisorOf(UUID id) {
         UserPrincipal actor = getCurrentUser();
         if (actor == null) return false;
@@ -173,6 +181,7 @@ public class AuthzService {
         return assignment.getSupervisor().getUser().getId().equals(actor.getId());
     }
 
+    @Transactional(readOnly = true)
     public boolean isInternOf(UUID id) {
         UserPrincipal actor = getCurrentUser();
         if (actor == null) return false;
@@ -192,6 +201,7 @@ public class AuthzService {
         return i.getCandidate().getUser().getId().equals(actor.getId());
     }
 
+    @Transactional(readOnly = true)
     public boolean isParticipantOf(UUID id) {
         return isSupervisorOf(id) || isInternOf(id);
     }

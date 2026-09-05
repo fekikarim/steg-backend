@@ -47,6 +47,14 @@ public class User extends BaseEntity {
     @Column(name = "preferred_locale", length = 10)
     private String preferredLocale = "fr";
 
+    /**
+     * EMAIL channel opt-in for notifications (Phase A10). IN_APP delivery is
+     * always created; EMAIL additionally requires
+     * {@code steg.notifications.mail.enabled=true}.
+     */
+    @Column(name = "email_notifications_enabled", nullable = false)
+    private Boolean emailNotificationsEnabled = true;
+
     @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(
             name = "user_roles",

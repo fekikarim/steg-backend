@@ -24,6 +24,19 @@ spring:
     baseline-version: 0
     locations: classpath:db/migration
 
+  # Transactional email transport (used only when notifications.mail.enabled=true)
+  mail:
+    host: ${SMTP_HOST:localhost}
+    port: ${SMTP_PORT:1025}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${SMTP_AUTH:false}
+          starttls:
+            enable: ${SMTP_STARTTLS:false}
+
 
 # Management & Observability (Actuator)
 management:
@@ -85,3 +98,14 @@ steg:
       #   or staff); ended members lose access but rows/history are preserved.
       # TODO — STEG VALIDATION REQUIRED: confirm the final value with STEG policy.
       completed-intern-access: ${GROUPS_COMPLETED_INTERN_ACCESS:retain}
+  notifications:
+    mail:
+      # Built-in email only (JavaMailSender over SMTP, e.g. a free/dev provider).
+      # No external notification SaaS. EMAIL deliveries are created only when true.
+      enabled: ${NOTIFICATIONS_MAIL_ENABLED:false}
+      from: ${NOTIFICATIONS_MAIL_FROM:no-reply@steg.tn}
+    retry:
+      fixed-delay-millis: ${NOTIFICATIONS_RETRY_DELAY_MILLIS:60000}
+      max-attempts: ${NOTIFICATIONS_RETRY_MAX_ATTEMPTS:5}
+      base-backoff-seconds: ${NOTIFICATIONS_RETRY_BASE_BACKOFF_SECONDS:60}
+      max-backoff-seconds: ${NOTIFICATIONS_RETRY_MAX_BACKOFF_SECONDS:3600}
