@@ -6,8 +6,11 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import tn.steg.backend.internship.domain.model.Internship;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+
+import tn.steg.backend.internship.domain.model.InternshipStatus;
 
 @Repository
 public interface InternshipRepository extends JpaRepository<Internship, UUID>, tn.steg.backend.internship.domain.repository.InternshipRepository {
@@ -16,4 +19,10 @@ public interface InternshipRepository extends JpaRepository<Internship, UUID>, t
 
     @Query("SELECT COUNT(i) FROM Internship i WHERE i.reference LIKE :prefix%")
     long countByReferencePrefix(@Param("prefix") String prefix);
+
+    @Query("select i from Internship i where i.candidate.id = :candidateId")
+    List<Internship> findByCandidateId(@Param("candidateId") UUID candidateId);
+
+    @Query("select i from Internship i where i.candidate.user.id = :userId and i.status = :status")
+    List<Internship> findByCandidateUserIdAndStatus(@Param("userId") UUID userId, @Param("status") InternshipStatus status);
 }

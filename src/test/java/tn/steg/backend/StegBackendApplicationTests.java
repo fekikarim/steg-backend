@@ -36,12 +36,12 @@ class StegBackendApplicationTests {
     }
 
     @Test
-    @DisplayName("Flyway migrations V1 through V18 are applied cleanly")
+    @DisplayName("Flyway migrations V1 through V19 are applied cleanly")
     void flywayMigrationSucceeds() {
         assertThat(flyway).isNotNull();
         MigrationInfo current = flyway.info().current();
         assertThat(current).isNotNull();
-        assertThat(current.getVersion().getVersion()).isEqualTo("18");
-        assertThat(current.getDescription()).isEqualTo("seed evaluation template");
+        assertThat(current.getVersion().getVersion()).isEqualTo("19");
+        assertThat(current.getDescription()).isEqualTo("messaging constraints");
     }
 }

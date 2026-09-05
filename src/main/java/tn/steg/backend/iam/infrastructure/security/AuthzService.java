@@ -14,6 +14,7 @@ import tn.steg.backend.companion.domain.repository.JournalEntryRepository;
 import tn.steg.backend.companion.domain.repository.TaskRepository;
 import tn.steg.backend.evaluation.domain.model.Evaluation;
 import tn.steg.backend.evaluation.domain.repository.EvaluationDomainRepository;
+import tn.steg.backend.messaging.domain.repository.ConversationMemberRepository;
 import tn.steg.backend.internship.domain.model.AssignmentStatus;
 import tn.steg.backend.internship.domain.model.Internship;
 import tn.steg.backend.internship.domain.model.InternshipAssignment;
@@ -45,6 +46,7 @@ public class AuthzService {
     private final JournalEntryRepository journalEntryRepository;
     private final DeliverableRepository deliverableRepository;
     private final EvaluationDomainRepository evaluationRepository;
+    private final ConversationMemberRepository conversationMemberRepository;
 
     public boolean isAuthenticated() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -104,8 +106,35 @@ public class AuthzService {
         return null;
     }
 
+    /**
+     * Phase A9: verifies the caller is an <em>active</em> ({@code leftAt IS NULL})
+     * member of the conversation. Backs every messaging endpoint via
+     * {@code @PreAuthorize("@authz.isOwnConversation(#conversationId)")}.
+     * Unknown ids return false (→ 403/404) without leaking existence.
+     */
     public boolean isOwnConversation(UUID conversationId) {
-        return isAuthenticated();
+        if (conversationId == null || !isAuthenticated()) {
+            return false;
+        }
+        if (hasRole("ADMIN")) {
+            return true;
+        }
+        UUID currentId = getCurrentUserId();
+        if (currentId == null) {
+            return false;
+        }
+        try {
+            return conversationMemberRepository
+                    .findActiveByConversationIdAndUserId(conversationId, currentId)
+                    .isPresent();
+        } catch (Exception e) {
+            log.debug("Conversation membership check failed for conv={}: {}", conversationId, e.getMessage());
+            return false;
+        }
+    }
+
+    public boolean isConversationMember(UUID conversationId) {
+        return isOwnConversation(conversationId);
     }
 
     // -------------------------------------------------------------------------

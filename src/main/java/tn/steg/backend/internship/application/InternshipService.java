@@ -25,6 +25,7 @@ import tn.steg.backend.organization.domain.model.Employee;
 import tn.steg.backend.organization.domain.repository.DepartmentRepository;
 import tn.steg.backend.organization.domain.repository.EmployeeRepository;
 import tn.steg.backend.workflow.application.WorkflowService;
+import tn.steg.backend.messaging.application.MessagingService;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -49,17 +50,22 @@ public class InternshipService {
     @Lazy
     private final WorkflowService workflowService;
 
+    /** Lazy: MessagingService depends on internship repositories but not on this service. */
+    @Lazy
+    private final MessagingService messagingService;
+
     private final InternshipClassificationService classificationService = new InternshipClassificationService();
     private final InternshipEligibilityService eligibilityService = new InternshipEligibilityService();
 
     public InternshipService(InternshipRepository internshipRepository,
-                              InternshipAssignmentRepository assignmentRepository,
-                              InternshipApplicationRepository applicationRepository,
-                              CandidateRepository candidateRepository,
-                              DepartmentRepository departmentRepository,
-                              EmployeeRepository employeeRepository,
-                              tn.steg.backend.companion.domain.repository.InternshipJournalRepository journalRepository,
-                              @Lazy WorkflowService workflowService) {
+                               InternshipAssignmentRepository assignmentRepository,
+                               InternshipApplicationRepository applicationRepository,
+                               CandidateRepository candidateRepository,
+                               DepartmentRepository departmentRepository,
+                               EmployeeRepository employeeRepository,
+                               tn.steg.backend.companion.domain.repository.InternshipJournalRepository journalRepository,
+                               @Lazy WorkflowService workflowService,
+                               @Lazy MessagingService messagingService) {
         this.internshipRepository  = internshipRepository;
         this.assignmentRepository  = assignmentRepository;
         this.applicationRepository = applicationRepository;
@@ -68,6 +74,7 @@ public class InternshipService {
         this.employeeRepository    = employeeRepository;
         this.journalRepository     = journalRepository;
         this.workflowService       = workflowService;
+        this.messagingService      = messagingService;
     }
 
     // -------------------------------------------------------------------------
@@ -245,6 +252,26 @@ public class InternshipService {
             internship.setStatus(InternshipStatus.ACTIVE);
             internship.setActivatedAt(Instant.now());
             internshipRepository.save(internship);
+        }
+
+        // Phase A9: auto-create/reuse the PRIVATE Intern↔Supervisor thread
+        // (Internship.privateThread 0..1, backed by conversations.internship_id
+        // with a partial unique index for type='PRIVATE'). Best-effort: a
+        // messaging failure must never roll back the assignment itself.
+        try {
+            if (internship.getCandidate() != null && internship.getCandidate().getUser() != null
+                    && supervisor.getUser() != null) {
+                messagingService.ensurePrivateThread(
+                        internship,
+                        internship.getCandidate().getUser(),
+                        supervisor.getUser());
+            } else {
+                log.warn("Skipping private thread creation for internship {}: missing intern/supervisor user link",
+                        internship.getReference());
+            }
+        } catch (Exception e) {
+            log.error("Failed to ensure private thread for internship {}: {}",
+                    internship.getReference(), e.getMessage());
         }
 
         return InternshipAssignmentResponse.from(newAssignment);

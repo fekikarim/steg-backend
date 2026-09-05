@@ -61,7 +61,7 @@ import tn.steg.backend.internship.infrastructure.persistence.InternshipAssignmen
 import tn.steg.backend.internship.infrastructure.persistence.InternshipRepository;
 import tn.steg.backend.messaging.domain.model.Conversation;
 import tn.steg.backend.messaging.domain.model.ConversationType;
-import tn.steg.backend.messaging.infrastructure.persistence.ConversationRepository;
+import tn.steg.backend.messaging.infrastructure.persistence.JpaConversationRepository;
 import tn.steg.backend.notification.domain.model.Notification;
 import tn.steg.backend.notification.domain.model.NotificationPriority;
 import tn.steg.backend.notification.infrastructure.persistence.NotificationRepository;
@@ -134,7 +134,7 @@ class DomainModelPersistenceIntegrationTest {
     @Autowired FinanceCaseRepository financeCaseRepository;
 
     // Messaging
-    @Autowired ConversationRepository conversationRepository;
+    @Autowired JpaConversationRepository conversationRepository;
 
     // Notification
     @Autowired NotificationRepository notificationRepository;
@@ -717,7 +717,8 @@ class DomainModelPersistenceIntegrationTest {
             Conversation conv = new Conversation(ConversationType.PRIVATE, "Test Conv", internship);
             em.persist(conv);
             em.flush();
-            assertThat(conversationRepository.findByInternshipId(internship.getId())).isPresent();
+            assertThat(conversationRepository.findByInternshipId(internship.getId())).hasSize(1);
+            assertThat(conversationRepository.findPrivateByInternshipId(internship.getId())).isPresent();
         }
     }
 

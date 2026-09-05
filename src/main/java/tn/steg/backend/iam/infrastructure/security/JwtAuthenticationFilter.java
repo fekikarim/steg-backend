@@ -118,7 +118,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 || path.startsWith("/swagger-ui")
                 || path.startsWith("/v3/api-docs")
                 || path.startsWith("/actuator/health")
-                || path.startsWith("/actuator/info");
+                || path.startsWith("/actuator/info")
+                // Phase A9: WS handshake carries the JWT via ?token=/Authorization
+                // and is validated by JwtHandshakeInterceptor instead.
+                || path.startsWith("/ws");
     }
 
     private void sendError(HttpServletResponse response, int status, String message, String path) throws IOException {

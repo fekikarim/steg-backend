@@ -52,7 +52,10 @@ public class SecurityConfig {
                                 "/v3/api-docs",
                                 "/v3/api-docs/**",
                                 "/actuator/health",
-                                "/actuator/info"
+                                "/actuator/info",
+                                // Phase A9: WS upgrade is authenticated by JwtHandshakeInterceptor
+                                // (Authorization header or ?token=), not by the servlet filter chain.
+                                "/ws/**"
                         ).permitAll()
                         .requestMatchers(
                                 "/api/auth/register",
