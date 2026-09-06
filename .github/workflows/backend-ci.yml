@@ -44,14 +44,14 @@ jobs:
 
       - name: Upload surefire reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: surefire-reports
           path: target/surefire-reports/
           retention-days: 14
 
       - name: Upload OpenAPI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openapi.json
           path: target/openapi/openapi.json
@@ -91,7 +91,7 @@ jobs:
 
       - name: Upload dependency-check report
         if: always() && hashFiles('target/dependency-check-report.html') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dependency-check-report
           path: target/dependency-check-report.html
