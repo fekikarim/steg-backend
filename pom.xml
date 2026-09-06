@@ -32,6 +32,7 @@
         <spring-ai.version>2.0.1</spring-ai.version>
         <jjwt.version>0.12.6</jjwt.version>
         <archunit.version>1.4.1</archunit.version>
+        <logstash-encoder.version>8.1</logstash-encoder.version>
     </properties>
     <dependencies>
         <dependency>
@@ -94,6 +95,16 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-tika-document-reader</artifactId>
+        </dependency>
+
+        <!-- Phase A13: structured JSON logging. Logstash encoder emits one JSON
+             object per event and flattens the MDC (traceId) as a top-level field,
+             so correlation IDs and message content are machine-parseable without
+             sacrificing human readability of the error envelope. -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>${logstash-encoder.version}</version>
         </dependency>
 
         <!-- Apache PDFBox for server-side PDF generation (Phase A11: certificates,

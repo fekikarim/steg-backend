@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Phase A13: structured JSON logging for every profile.
+  One JSON object per event via the Logstash encoder; the MDC traceId
+  (set by TraceIdFilter) is flattened as a top-level field so logs are
+  machine-parseable and every line of a request can be correlated.
+  Throwables are captured as structured stack_trace fields, never as raw
+  string dumps. Logging stays fail-safe: the root level matches the
+  framework default (INFO) and no secrets are ever rendered by appenders.
+-->
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <customFields>{"service":"steg-backend"}</customFields>
+            <includeMdc>true</includeMdc>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

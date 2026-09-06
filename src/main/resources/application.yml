@@ -44,14 +44,33 @@ spring:
 
 
 # Management & Observability (Actuator)
+# Phase A13 hardening: only the operations-required endpoints are exposed.
+# Health/probes/info stay reachable by load-balancer probes; metrics and
+# Prometheus carry internal operational detail and are therefore ADMIN-only
+# (enforced in SecurityConfig). All other endpoints (env, configprops, beans,
+# threaddump, heapdump, loggers, shutdown, mappings) remain unexposed.
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        include: health,info,metrics,prometheus
   endpoint:
     health:
+      probes:
+        enabled: true
+      # Anonymous probes see only the bare status; details require a
+      # successful authentication (authorized) of an ADMIN/ops account.
       show-details: when_authorized
+      # Only NAME + UP/DOWN per component for authorized ops users; values
+      # are never emitted.
+      show-components: when_authorized
+  health:
+    # SMTP connectivity is NOT a serving-readiness dependency of this API
+    # (mailing is fire-and-forget with its own failure handling). Without a
+    # reachable SMTP relay in dev, the ungrouped mail contributor would pull
+    # the whole /actuator/health aggregate to DOWN.
+    mail:
+      enabled: false
   prometheus:
     metrics:
       export:
@@ -66,6 +85,11 @@ springdoc:
     path: /swagger-ui.html
     operationsSorter: method
     tagsSorter: alpha
+  # Expand Spring Data Pageable into explicit page/size/sort query parameters so
+  # client generators do not have to resolve the framework-level Pageable schema.
+  model-converters:
+    pageable-converter:
+      enabled: true
     enabled: true
 
 # Custom STEG Platform Properties (Externalized)

@@ -51,12 +51,23 @@ public class SecurityConfig {
                                 "/swagger-ui/**",
                                 "/v3/api-docs",
                                 "/v3/api-docs/**",
+                                // Phase A13: anonymity is limited to the probe endpoints.
+                                // Health/liveness/readiness respond UP/DOWN only (show-details
+                                // is when_authorized) so infrastructure probes keep working;
+                                // the /actuator/info build stamp carries no secrets.
                                 "/actuator/health",
+                                "/actuator/health/**",
                                 "/actuator/info",
                                 // Phase A9: WS upgrade is authenticated by JwtHandshakeInterceptor
                                 // (Authorization header or ?token=), not by the servlet filter chain.
                                 "/ws/**"
                         ).permitAll()
+                        // Phase A13: metrics/scrubbing endpoints expose internal operational
+                        // detail (thread/queue/pool labels) — ADMIN only. env, configprops,
+                        // heapdump, threaddump, loggers etc. are not even exposed on the web
+                        // port, so these riskier ones are never reachable.
+                        .requestMatchers("/actuator/metrics/**", "/actuator/prometheus/**")
+                        .hasRole("ADMIN")
                         .requestMatchers(
                                 "/api/auth/register",
                                 "/api/auth/login",

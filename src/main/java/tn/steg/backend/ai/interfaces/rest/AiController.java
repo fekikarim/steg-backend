@@ -13,6 +13,7 @@ import tn.steg.backend.ai.application.dto.AiAnalysisResultResponse;
 import tn.steg.backend.ai.application.dto.AiRecommendationResponse;
 import tn.steg.backend.ai.application.dto.AiRecommendationReviewRequest;
 import tn.steg.backend.ai.application.dto.CandidateAssistantQueryRequest;
+import tn.steg.backend.common.domain.annotation.RateLimited;
 import tn.steg.backend.common.domain.model.UserPrincipal;
 
 import java.util.UUID;
@@ -27,6 +28,7 @@ public class AiController {
 
     @PostMapping("/applications/{id}/analyze")
     @PreAuthorize("hasAnyRole('ADMIN', 'HR')")
+    @RateLimited(name = "ai-analyze", limit = 20, windowSeconds = 60)
     @Operation(summary = "Analyze application documents (Advisory, staff-triggered)")
     public ResponseEntity<AiAnalysisResultResponse> analyzeApplication(
             @PathVariable UUID id,
@@ -36,6 +38,7 @@ public class AiController {
 
     @PostMapping("/finance-cases/{id}/analyze")
     @PreAuthorize("hasAnyRole('ADMIN', 'FINANCE')")
+    @RateLimited(name = "ai-finance-analyze", limit = 20, windowSeconds = 60)
     @Operation(summary = "Analyze finance case dossier (Advisory, FINANCE-role only)")
     public ResponseEntity<AiAnalysisResultResponse> analyzeFinanceCase(
             @PathVariable UUID id,
@@ -45,6 +48,7 @@ public class AiController {
 
     @PostMapping("/internships/{id}/logbook/generate")
     @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#id)")
+    @RateLimited(name = "ai-logbook-generate", limit = 10, windowSeconds = 60)
     @Operation(summary = "Generate draft logbook based on journal, tasks, and deliverables (Intern/Supervisor)")
     public ResponseEntity<AiAnalysisResultResponse> generateLogbook(
             @PathVariable UUID id,
@@ -54,6 +58,7 @@ public class AiController {
 
     @PostMapping("/assistant/query")
     @PreAuthorize("hasRole('CANDIDATE')")
+    @RateLimited(name = "ai-assistant", limit = 20, windowSeconds = 60)
     @Operation(summary = "Candidate virtual assistant Q&A (Strictly candidate-scoped)")
     public ResponseEntity<AiAnalysisResultResponse> queryAssistant(
             @Valid @RequestBody CandidateAssistantQueryRequest request,
@@ -63,6 +68,7 @@ public class AiController {
 
     @PostMapping("/recommendations/{id}/review")
     @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'FINANCE', 'SUPERVISOR')")
+    @RateLimited(name = "ai-review", limit = 20, windowSeconds = 60)
     @Operation(summary = "Review AI recommendation (Human marks ACCEPTED_BY_HUMAN or DISMISSED for traceability)")
     public ResponseEntity<AiRecommendationResponse> reviewRecommendation(
             @PathVariable UUID id,

@@ -25,10 +25,12 @@ import tn.steg.backend.workflow.domain.repository.WorkflowActionRepository;
 import tn.steg.backend.workflow.domain.repository.WorkflowDefinitionRepository;
 import tn.steg.backend.workflow.domain.repository.WorkflowInstanceRepository;
 import tn.steg.backend.workflow.domain.repository.WorkflowStepDefinitionRepository;
+import tn.steg.backend.audit.application.AuditService;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.Map;
 
 /**
  * Central workflow orchestrator for the Phase A5 engine.
@@ -58,6 +60,7 @@ public class WorkflowService {
     private final WorkflowInstanceRepository         instanceRepository;
     private final WorkflowActionRepository           actionRepository;
     private final UserRepository                     userRepository;
+    private final AuditService                       auditService;
 
     /** Business facts for cross-cutting concerns (notifications); the workflow
      * module never depends on those consumers (Phase A10). */
@@ -182,6 +185,8 @@ public class WorkflowService {
         log.info("ApplicationWorkflow transition: appId={} → step={} decision={} by actor={}",
                 applicationId, request.targetStepCode(), request.decision(), actor.getId());
 
+        auditApplicationTransition(applicationId, request, action, actor);
+
         // Phase A10: notify the candidate on final accept/reject (consumed
         // AFTER_COMMIT, so no alert fires if this transaction rolls back).
         if ("FINAL_DECISION".equalsIgnoreCase(request.targetStepCode())) {
@@ -224,6 +229,8 @@ public class WorkflowService {
         // Apply aggregate state change
         applyInternshipStatusTransition(instance.getInternship(), request.targetStepCode());
 
+        String previousStepCode = instance.getCurrentStep() != null ? instance.getCurrentStep().getCode() : null;
+
         // Advance workflow state
         instance.setCurrentStep(targetStep);
         if ("COMPLETED".equalsIgnoreCase(request.targetStepCode())) {
@@ -235,6 +242,12 @@ public class WorkflowService {
         WorkflowAction action = persistAction(instance, targetStep, performer, request);
         log.info("InternshipWorkflow transition: internshipId={} → step={} by actor={}",
                 internshipId, request.targetStepCode(), actor.getId());
+        auditService.log(
+                "COMPLETED".equalsIgnoreCase(request.targetStepCode()) ? "INTERNSHIP_COMPLETED" : "INTERNSHIP_ACTIVATED",
+                "Internship", internshipId,
+                Map.of("step", previousStepCode),
+                Map.of("targetStep", request.targetStepCode(), "workflowActionId", action.getId()),
+                actor.getId(), null);
         return WorkflowActionResponse.from(action);
     }
 
@@ -375,6 +388,39 @@ public class WorkflowService {
                 instance, step, performer,
                 request.actionType(), request.decision(), request.comment(), nextSeq);
         return actionRepository.save(action);
+    }
+
+    /**
+     * Maps decision-bearing application workflow transitions onto the global
+     * AuditLog (requirement §89: application acceptance/rejection must be
+     * auditable). The immutable WorkflowAction row remains the transition's
+     * authoritative in-workflow record; this entry adds the unified audit trail.
+     */
+    private void auditApplicationTransition(UUID applicationId, WorkflowTransitionRequest request,
+                                            WorkflowAction action, UserPrincipal actor) {
+        String auditAction;
+        if ("FINAL_DECISION".equalsIgnoreCase(request.targetStepCode())
+                && request.decision() == ApprovalDecision.APPROVED) {
+            auditAction = "APPLICATION_ACCEPTED";
+        } else if ("FINAL_DECISION".equalsIgnoreCase(request.targetStepCode())
+                && request.decision() == ApprovalDecision.REJECTED) {
+            auditAction = "APPLICATION_REJECTED";
+        } else if ("FINAL_DECISION".equalsIgnoreCase(request.targetStepCode())
+                && request.decision() == ApprovalDecision.NEEDS_CORRECTION) {
+            auditAction = "APPLICATION_NEEDS_CORRECTION";
+        } else if ("UNDER_REVIEW".equalsIgnoreCase(request.targetStepCode())) {
+            auditAction = "APPLICATION_UNDER_REVIEW";
+        } else {
+            auditAction = null;
+        }
+        if (auditAction == null) {
+            return;
+        }
+        auditService.log(auditAction, "InternshipApplication", applicationId,
+                Map.of("step", "CURRENT"),
+                Map.of("targetStep", request.targetStepCode(),
+                        "decision", request.decision() != null ? request.decision().name() : "NONE",
+                        "workflowActionId", action.getId()), actor.getId(), null);
     }
 
     /**

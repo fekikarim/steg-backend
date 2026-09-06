@@ -18,11 +18,13 @@ import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.organization.domain.repository.EmployeeRepository;
 import tn.steg.backend.workflow.application.WorkflowService;
+import tn.steg.backend.audit.application.AuditService;
 
 import java.time.LocalDate;
 import java.time.Year;
 import java.util.List;
 import java.util.UUID;
+import java.util.Map;
 
 /**
  * Application service for the InternshipApplication lifecycle.
@@ -46,6 +48,7 @@ public class ApplicationService {
     private final InternshipApplicationRepository applicationRepository;
     private final CandidateRepository candidateRepository;
     private final EmployeeRepository employeeRepository;
+    private final AuditService auditService;
 
     /** Lazy to avoid circular dependency: WorkflowService → UserRepository → ApplicationService chain. */
     @Lazy
@@ -54,10 +57,12 @@ public class ApplicationService {
     public ApplicationService(InternshipApplicationRepository applicationRepository,
                                CandidateRepository candidateRepository,
                                EmployeeRepository employeeRepository,
+                               AuditService auditService,
                                @Lazy WorkflowService workflowService) {
         this.applicationRepository = applicationRepository;
         this.candidateRepository   = candidateRepository;
         this.employeeRepository    = employeeRepository;
+        this.auditService          = auditService;
         this.workflowService       = workflowService;
     }
 
@@ -82,6 +87,8 @@ public class ApplicationService {
 
         application = applicationRepository.save(application);
         log.info("Application created: ref={} by candidate={}", reference, candidate.getId());
+        auditService.log("APPLICATION_CREATED", "InternshipApplication", application.getId(), null,
+                Map.of("reference", reference, "status", ApplicationStatus.DRAFT.toString()), actor.getId(), null);
         return ApplicationResponse.from(application);
     }
 
@@ -138,6 +145,10 @@ public class ApplicationService {
 
         application = applicationRepository.save(application);
         log.info("Application updated: id={}", id);
+        auditService.log("APPLICATION_UPDATED", "InternshipApplication", id, null,
+                Map.of("desiredStartDate", application.getDesiredStartDate(),
+                        "desiredEndDate", application.getDesiredEndDate(),
+                        "proposedTheme", application.getProposedTheme()), actor.getId(), null);
         return ApplicationResponse.from(application);
     }
 
@@ -164,6 +175,9 @@ public class ApplicationService {
         workflowService.spawnApplicationWorkflow(application);
 
         log.info("Application submitted and workflow spawned: ref={}", application.getReference());
+        auditService.log("APPLICATION_SUBMITTED", "InternshipApplication", id,
+                Map.of("status", ApplicationStatus.DRAFT.toString()),
+                Map.of("status", ApplicationStatus.SUBMITTED.toString()), actor.getId(), null);
         return ApplicationResponse.from(application);
     }
 
@@ -186,6 +200,9 @@ public class ApplicationService {
         application.setStatus(ApplicationStatus.WITHDRAWN);
         application = applicationRepository.save(application);
         log.info("Application withdrawn: ref={}", application.getReference());
+        auditService.log("APPLICATION_WITHDRAWN", "InternshipApplication", id,
+                Map.of("status", application.getStatus().toString()),
+                Map.of("status", ApplicationStatus.WITHDRAWN.toString()), actor.getId(), null);
         return ApplicationResponse.from(application);
     }
 
@@ -216,6 +233,9 @@ public class ApplicationService {
 
         application = applicationRepository.save(application);
         log.info("Application resubmitted: ref={}", application.getReference());
+        auditService.log("APPLICATION_RESUBMITTED", "InternshipApplication", id,
+                Map.of("status", ApplicationStatus.NEEDS_CORRECTION.toString()),
+                Map.of("status", ApplicationStatus.SUBMITTED.toString()), actor.getId(), null);
         return ApplicationResponse.from(application);
     }
 

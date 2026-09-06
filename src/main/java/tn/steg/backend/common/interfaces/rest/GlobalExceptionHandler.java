@@ -14,6 +14,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
+import tn.steg.backend.common.domain.exception.RateLimitExceededException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.application.dto.ErrorEnvelope;
 import tn.steg.backend.common.application.dto.FieldErrorDto;
@@ -32,6 +33,7 @@ public class GlobalExceptionHandler {
 
     private static final String TRACE_ID_HEADER = "X-Trace-Id";
     private static final String MDC_TRACE_KEY = "traceId";
+    private static final String REDACTED = "[REDACTED]";
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorEnvelope> handleValidationException(MethodArgumentNotValidException ex, HttpServletRequest request) {
@@ -51,7 +53,10 @@ public class GlobalExceptionHandler {
                 request,
                 fieldErrors
         );
-        log.warn("Validation error on path {}: {}", request.getRequestURI(), fieldErrors);
+        // A13 security: rejected values may echo credentials/secrets. The client's
+        // own input is returned in the envelope, but the LOG must not persist
+        // rejected values (see steg.security PII/secret logging policy).
+        log.warn("Validation error on path {}: {}", request.getRequestURI(), redact(fieldErrors));
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(envelope);
     }
 
@@ -98,6 +103,22 @@ public class GlobalExceptionHandler {
         );
         log.warn("Resource not found on path {}: {}", request.getRequestURI(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(envelope);
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorEnvelope> handleRateLimitExceeded(RateLimitExceededException ex, HttpServletRequest request) {
+        ErrorEnvelope envelope = buildEnvelope(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "Rate Limit Exceeded",
+                ex.getMessage(),
+                request,
+                null
+        );
+        log.warn("Rate limit exceeded on path {} (bucket={}, limit={}/{}s): {}", request.getRequestURI(),
+                ex.getBucketName(), ex.getLimit(), ex.getWindowSeconds(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", String.valueOf(ex.getWindowSeconds()))
+                .body(envelope);
     }
 
     @ExceptionHandler(AccessDeniedException.class)
@@ -166,6 +187,19 @@ public class GlobalExceptionHandler {
         );
         log.error("Unhandled exception processing request to path {}: ", request.getRequestURI(), ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(envelope);
+    }
+
+    private List<FieldErrorDto> redact(List<FieldErrorDto> fieldErrors) {
+        if (fieldErrors == null) {
+            return List.of();
+        }
+        return fieldErrors.stream()
+                .map(e -> FieldErrorDto.builder()
+                        .field(e.getField())
+                        .rejectedValue(REDACTED)
+                        .message(e.getMessage())
+                        .build())
+                .toList();
     }
 
     private ErrorEnvelope buildEnvelope(HttpStatus status, String error, String message, HttpServletRequest request, List<FieldErrorDto> fieldErrors) {

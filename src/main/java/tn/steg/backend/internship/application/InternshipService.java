@@ -28,11 +28,13 @@ import tn.steg.backend.organization.domain.repository.DepartmentRepository;
 import tn.steg.backend.organization.domain.repository.EmployeeRepository;
 import tn.steg.backend.workflow.application.WorkflowService;
 import tn.steg.backend.messaging.application.MessagingService;
+import tn.steg.backend.audit.application.AuditService;
 
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.Year;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -59,6 +61,8 @@ public class InternshipService {
     /** Business facts for cross-cutting concerns; never a dependency on consumers (Phase A10). */
     private final ApplicationEventPublisher eventPublisher;
 
+    private final AuditService auditService;
+
     private final InternshipClassificationService classificationService = new InternshipClassificationService();
     private final InternshipEligibilityService eligibilityService = new InternshipEligibilityService();
 
@@ -71,7 +75,8 @@ public class InternshipService {
                                tn.steg.backend.companion.domain.repository.InternshipJournalRepository journalRepository,
                                @Lazy WorkflowService workflowService,
                                @Lazy MessagingService messagingService,
-                               ApplicationEventPublisher eventPublisher) {
+                               ApplicationEventPublisher eventPublisher,
+                               AuditService auditService) {
         this.internshipRepository  = internshipRepository;
         this.assignmentRepository  = assignmentRepository;
         this.applicationRepository = applicationRepository;
@@ -82,6 +87,7 @@ public class InternshipService {
         this.workflowService       = workflowService;
         this.messagingService      = messagingService;
         this.eventPublisher        = eventPublisher;
+        this.auditService          = auditService;
     }
 
     // -------------------------------------------------------------------------
@@ -125,6 +131,10 @@ public class InternshipService {
         internship = internshipRepository.save(internship);
         journalRepository.save(new tn.steg.backend.companion.domain.model.InternshipJournal(internship));
         log.info("Internship created from application: ref={}, candidate={}", reference, application.getCandidate().getId());
+        auditService.log("INTERNSHIP_CREATED_FROM_APPLICATION", "Internship", internship.getId(), null,
+                Map.of("reference", reference, "applicationId", application.getId(),
+                        "type", classification.type(), "requirement", classification.requirement()),
+                actor.getId(), null);
 
         // Phase A5: spawn workflow instance so PLANNED → ACTIVE → COMPLETED transitions
         // are governed by the Workflow Engine via POST /api/internships/{id}/workflow/actions
@@ -164,6 +174,10 @@ public class InternshipService {
         internship = internshipRepository.save(internship);
         journalRepository.save(new tn.steg.backend.companion.domain.model.InternshipJournal(internship));
         log.info("Internship created manually: ref={}, candidate={}", reference, candidate.getId());
+        auditService.log("INTERNSHIP_CREATED_MANUAL", "Internship", internship.getId(), null,
+                Map.of("reference", reference, "candidateId", candidate.getId(),
+                        "type", classification.type(), "requirement", classification.requirement()),
+                actor.getId(), null);
 
         // Phase A5: spawn workflow instance for manually created internships too
         workflowService.spawnInternshipWorkflow(internship);
@@ -190,6 +204,10 @@ public class InternshipService {
                 request.observationObligatoire()
         );
 
+        Map<String, Object> oldValues = Map.of(
+                "startDate", internship.getStartDate(), "endDate", internship.getEndDate(),
+                "type", internship.getType(), "requirement", internship.getRequirement());
+
         internship.setStartDate(request.startDate());
         internship.setEndDate(request.endDate());
         internship.setType(classification.type());
@@ -198,7 +216,11 @@ public class InternshipService {
         internship = internshipRepository.save(internship);
         log.info("Internship dates updated & reclassified: ref={}, type={}, req={}",
                 internship.getReference(), classification.type(), classification.requirement());
-
+        auditService.log("INTERNSHIP_REQUIREMENT_CHANGED", "Internship", id,
+                oldValues,
+                Map.of("startDate", request.startDate(), "endDate", request.endDate(),
+                        "type", classification.type(), "requirement", classification.requirement()),
+                actor.getId(), null);
         return InternshipResponse.from(internship);
     }
 
@@ -228,8 +250,12 @@ public class InternshipService {
         Optional<InternshipAssignment> currentActiveOpt = assignmentRepository
                 .findByInternshipIdAndStatus(internshipId, AssignmentStatus.ACTIVE);
 
+        Map<String, Object> previousAssignment = null;
         if (currentActiveOpt.isPresent()) {
             InternshipAssignment currentActive = currentActiveOpt.get();
+            previousAssignment = Map.of(
+                    "supervisorId", currentActive.getSupervisor().getId(),
+                    "departmentId", currentActive.getDestination().getId());
             currentActive.setStatus(AssignmentStatus.REASSIGNED);
             currentActive.setEndedAt(Instant.now());
             assignmentRepository.saveAndFlush(currentActive);
@@ -253,6 +279,11 @@ public class InternshipService {
         newAssignment.setAssignmentReason(request.assignmentReason());
 
         newAssignment = assignmentRepository.save(newAssignment);
+        auditService.log("INTERNSHIP_ASSIGNMENT_ASSIGNED", "InternshipAssignment", newAssignment.getId(),
+                previousAssignment,
+                Map.of("internshipId", internshipId, "supervisorId", supervisor.getId(),
+                        "departmentId", destination.getId(), "status", AssignmentStatus.ACTIVE),
+                actor.getId(), null);
 
         // If internship was PLANNED, update to ACTIVE
         if (internship.getStatus() == InternshipStatus.PLANNED) {
@@ -344,8 +375,12 @@ public class InternshipService {
         if (internship.getStatus() == InternshipStatus.COMPLETED) {
             throw new BusinessRuleException("INTERNSHIP_ALREADY_COMPLETED", "Completed internship cannot be cancelled.");
         }
+        InternshipStatus previousStatus = internship.getStatus();
         internship.setStatus(InternshipStatus.CANCELLED);
         internship.setCancelledAt(Instant.now());
+        auditService.log("INTERNSHIP_CANCELLED", "Internship", id,
+                Map.of("status", previousStatus.toString()),
+                Map.of("status", InternshipStatus.CANCELLED.toString()), actor.getId(), null);
         return InternshipResponse.from(internshipRepository.save(internship));
     }
 

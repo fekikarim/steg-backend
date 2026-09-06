@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -18,6 +19,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.common.application.dto.ErrorEnvelope;
+import tn.steg.backend.common.infrastructure.logging.TraceIdFilter;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -134,9 +136,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 .error(status == 401 ? "Authentication Required" : "Access Denied")
                 .message(message)
                 .path(path)
-                .traceId(UUID.randomUUID().toString())
+                .traceId(resolveTraceId())
                 .build();
 
         response.getWriter().write(objectMapper.writeValueAsString(envelope));
+    }
+
+    private String resolveTraceId() {
+        String traceId = MDC.get(TraceIdFilter.MDC_TRACE_KEY);
+        if (traceId == null || traceId.isBlank()) {
+            traceId = UUID.randomUUID().toString();
+        }
+        return traceId;
     }
 }

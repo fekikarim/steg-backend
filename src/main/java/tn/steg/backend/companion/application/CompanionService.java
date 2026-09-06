@@ -20,6 +20,7 @@ import tn.steg.backend.companion.domain.repository.DeliverableVersionRepository;
 import tn.steg.backend.companion.domain.repository.InternshipJournalRepository;
 import tn.steg.backend.companion.domain.repository.JournalEntryRepository;
 import tn.steg.backend.companion.domain.repository.TaskRepository;
+import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.document.application.DocumentService;
 import tn.steg.backend.document.domain.model.DocumentType;
 import tn.steg.backend.document.domain.model.FileAsset;
@@ -44,6 +45,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -63,6 +65,7 @@ public class CompanionService {
     private final FileAssetRepository fileAssetRepository;
     private final DocumentValidationService documentValidationService;
     private final MalwareScanner malwareScanner;
+    private final AuditService auditService;
 
     /** Business facts for cross-cutting concerns; never a dependency on consumers (Phase A10). */
     private final ApplicationEventPublisher eventPublisher;
@@ -93,6 +96,10 @@ public class CompanionService {
 
         task = taskRepository.save(task);
         log.info("Task created: id={}, internship={}, creator={}", task.getId(), internshipId, creator.getId());
+        auditService.log("COMPANION_TASK_CREATED", "Task", task.getId(), null,
+                Map.of("internshipId", internshipId, "title", task.getTitle(),
+                        "assignedToId", assignedTo != null ? assignedTo.getId() : null),
+                actor.getId(), null);
 
         // Phase A10: notify the assignee (not for self-assigned tasks).
         if (assignedTo != null && !assignedTo.getId().equals(creator.getId())) {
@@ -138,6 +145,11 @@ public class CompanionService {
         }
 
         task = taskRepository.save(task);
+        auditService.log("COMPANION_TASK_UPDATED", "Task", task.getId(),
+                Map.of("title", task.getTitle(), "status", task.getStatus()),
+                Map.of("title", task.getTitle(), "status", task.getStatus(),
+                        "assignedToId", task.getAssignedTo() != null ? task.getAssignedTo().getId() : null),
+                actor.getId(), null);
         return TaskResponse.from(task);
     }
 
@@ -154,6 +166,8 @@ public class CompanionService {
         }
 
         task = taskRepository.save(task);
+        auditService.log("COMPANION_TASK_STATUS_CHANGED", "Task", taskId, null,
+                Map.of("status", status, "completedAt", task.getCompletedAt()), actor.getId(), null);
         return TaskResponse.from(task);
     }
 
@@ -208,6 +222,8 @@ public class CompanionService {
         entry.setSubmittedAt(Instant.now());
         entry = journalEntryRepository.save(entry);
         log.info("Journal entry submitted: id={}", entry.getId());
+        auditService.log("JOURNAL_ENTRY_SUBMITTED", "JournalEntry", entry.getId(), null,
+                Map.of("status", entry.getStatus(), "submittedAt", entry.getSubmittedAt()), actor.getId(), null);
         return JournalEntryResponse.from(entry);
     }
 
@@ -229,6 +245,11 @@ public class CompanionService {
         entry.setValidatedAt(Instant.now());
         entry = journalEntryRepository.save(entry);
         log.info("Journal entry validated: id={}, validatedBy={}", entry.getId(), supervisor != null ? supervisor.getId() : null);
+        auditService.log("JOURNAL_ENTRY_VALIDATED", "JournalEntry", entry.getId(),
+                Map.of("status", JournalEntryStatus.SUBMITTED),
+                Map.of("status", JournalEntryStatus.VALIDATED,
+                        "validatedBy", supervisor != null ? supervisor.getId() : null),
+                actor.getId(), null);
 
         // Phase A10: notify the intern author (consumed AFTER_COMMIT).
         eventPublisher.publishEvent(new JournalEntryValidatedEvent(
@@ -255,6 +276,12 @@ public class CompanionService {
         entry.setValidatedAt(Instant.now());
         entry = journalEntryRepository.save(entry);
         log.info("Journal entry rejected: id={}, rejectedBy={}", entry.getId(), supervisor != null ? supervisor.getId() : null);
+        auditService.log("JOURNAL_ENTRY_REJECTED", "JournalEntry", entry.getId(),
+                Map.of("status", JournalEntryStatus.SUBMITTED),
+                Map.of("status", JournalEntryStatus.REJECTED,
+                        "reason", request.comment(),
+                        "validatedBy", supervisor != null ? supervisor.getId() : null),
+                actor.getId(), null);
         return JournalEntryResponse.from(entry);
     }
 
@@ -293,6 +320,8 @@ public class CompanionService {
         version = deliverableVersionRepository.save(version);
 
         log.info("Deliverable created: id={}, v1 fileAsset={}, uploader={}", deliverable.getId(), fileAsset.getId(), uploader.getId());
+        auditService.log("DELIVERABLE_CREATED", "Deliverable", deliverable.getId(), null,
+                Map.of("internshipId", internshipId, "title", title, "currentVersion", 1), actor.getId(), null);
         return toDeliverableResponse(deliverable);
     }
 
@@ -316,6 +345,9 @@ public class CompanionService {
         deliverableVersionRepository.save(version);
 
         log.info("Deliverable {} new version {} uploaded by {}", deliverableId, nextVersion, uploader.getId());
+        auditService.log("DELIVERABLE_VERSION_UPLOADED", "Deliverable", deliverableId,
+                Map.of("currentVersion", nextVersion - 1),
+                Map.of("currentVersion", nextVersion, "changeSummary", changeSummary), actor.getId(), null);
         return toDeliverableResponse(deliverable);
     }
 
@@ -342,6 +374,8 @@ public class CompanionService {
         deliverable.setSubmittedAt(Instant.now());
         deliverable = deliverableRepository.save(deliverable);
         log.info("Deliverable submitted: id={}", deliverableId);
+        auditService.log("DELIVERABLE_SUBMITTED", "Deliverable", deliverableId, null,
+                Map.of("status", DeliverableStatus.SUBMITTED, "submittedAt", deliverable.getSubmittedAt()), actor.getId(), null);
         return toDeliverableResponse(deliverable);
     }
 
@@ -362,6 +396,10 @@ public class CompanionService {
         deliverable.setValidatedAt(Instant.now());
         deliverable = deliverableRepository.save(deliverable);
         log.info("Deliverable validated: id={}, validatedBy={}", deliverableId, supervisor != null ? supervisor.getId() : null);
+        auditService.log("DELIVERABLE_VALIDATED", "Deliverable", deliverableId,
+                Map.of("status", DeliverableStatus.SUBMITTED),
+                Map.of("status", DeliverableStatus.VALIDATED,
+                        "validatedBy", supervisor != null ? supervisor.getId() : null), actor.getId(), null);
         return toDeliverableResponse(deliverable);
     }
 
@@ -382,6 +420,11 @@ public class CompanionService {
         deliverable.setValidatedAt(Instant.now());
         deliverable = deliverableRepository.save(deliverable);
         log.info("Deliverable rejected: id={}, rejectedBy={}", deliverableId, supervisor != null ? supervisor.getId() : null);
+        auditService.log("DELIVERABLE_REJECTED", "Deliverable", deliverableId,
+                Map.of("status", DeliverableStatus.SUBMITTED),
+                Map.of("status", DeliverableStatus.REJECTED,
+                        "reason", request.comment(),
+                        "validatedBy", supervisor != null ? supervisor.getId() : null), actor.getId(), null);
         return toDeliverableResponse(deliverable);
     }
 
@@ -401,6 +444,9 @@ public class CompanionService {
 
         FileAsset fa = version.getFile();
         InputStream is = fileStorageService.getInputStream(fa.getStorageKey());
+        auditService.log("DELIVERABLE_VERSION_DOWNLOADED", "Deliverable", deliverableId, null,
+                Map.of("versionNumber", version.getVersionNumber(), "fileName", fa.getOriginalFileName()),
+                actor.getId(), null);
         return new DocumentService.DownloadStream(is, fa.getOriginalFileName(), fa.getMimeType(), fa.getSize());
     }
 

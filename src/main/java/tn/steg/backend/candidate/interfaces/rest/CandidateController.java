@@ -1,6 +1,7 @@
 package tn.steg.backend.candidate.interfaces.rest;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -110,6 +111,7 @@ public class CandidateController {
      * Public university list used by the front-end registration form.
      */
     @PublicEndpoint
+    @SecurityRequirements
     @GetMapping("/universities")
     @Operation(summary = "List active universities (public reference data)")
     public ResponseEntity<List<UniversityResponse>> listUniversities() {
