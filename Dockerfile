@@ -3,7 +3,7 @@
 # Tests are intentionally skipped here (they run in CI, where Testcontainers
 # has a Docker daemon; `docker build` alone must stay hermetic and fast).
 
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM maven:3-eclipse-temurin-26 AS build
 WORKDIR /app
 
 # Dependency layer first for better layer caching.
