@@ -15,7 +15,7 @@ COPY src src
 RUN ./mvnw -q -B -DskipTests package
 
 # ---------------------------------------------------------------- runtime ---
-FROM eclipse-temurin:21-jre-jammy AS runtime
+FROM eclipse-temurin:25-jre-jammy AS runtime
 
 # curl only for the container healthcheck below.
 RUN apt-get update \
