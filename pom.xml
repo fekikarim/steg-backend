@@ -31,7 +31,7 @@
         <datasource-micrometer.version>2.2.1</datasource-micrometer.version>
         <spring-ai.version>2.0.1</spring-ai.version>
         <jjwt.version>0.12.6</jjwt.version>
-        <archunit.version>1.4.1</archunit.version>
+        <archunit.version>1.5.0</archunit.version>
         <logstash-encoder.version>8.1</logstash-encoder.version>
     </properties>
     <dependencies>
