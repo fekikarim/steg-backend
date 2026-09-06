@@ -1,0 +1,21 @@
+# Phase A14 — automated dependency bumps (Maven, Docker base images, Actions).
+# Security fixes (e.g. Tomcat, jsoup) arrive as grouped PRs for fast triage.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      spring-boot:
+        patterns: ['org.springframework*', 'org.springframework.boot*', 'org.springframework.security*', 'org.springframework.data*']
+      springdoc-micrometer:
+        patterns: ['org.springdoc*', 'io.micrometer*']
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

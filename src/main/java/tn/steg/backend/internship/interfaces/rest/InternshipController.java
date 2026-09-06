@@ -35,7 +35,10 @@ public class InternshipController {
         return ResponseEntity.ok(internshipService.listInternships());
     }
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR', 'SUPERVISOR', 'CANDIDATE')")
+    // A14 IDOR fix: candidates may read ONLY their own internship. Staff keep
+    // wide read (consistent with the staff-only list endpoint); cross-candidate
+    // reads previously passed the role-only gate and leaked candidateFullName.
+    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR', 'SUPERVISOR') or @authz.isInternOf(#id)")
     @GetMapping("/{id}")
     @Operation(summary = "Get internship details by ID")
     public ResponseEntity<InternshipResponse> getInternship(@PathVariable UUID id) {
@@ -123,7 +126,7 @@ public class InternshipController {
     // Transparency / Classification Explanation
     // -------------------------------------------------------------------------
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR', 'SUPERVISOR', 'CANDIDATE')")
+    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR', 'SUPERVISOR') or @authz.isInternOf(#id)")
     @GetMapping("/{id}/classification")
     @Operation(summary = "Get computed classification explanation",
                description = "Exposes computed type, requirement, payment eligibility, duration in days, and rule rationale.")

@@ -50,8 +50,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Application service for the Messaging module (A9).
@@ -325,10 +327,11 @@ public class MessagingService {
 
         Page<Message> page;
         if (cursorExclusive != null) {
-            page = messageRepository.findByConversationIdAndSequenceNumberLessThanEqual(
+            // A14 N+1 fix: sender fetched in the page query itself.
+            page = messageRepository.findByConversationIdAndSequenceNumberLessThanEqualWithSender(
                     conversationId, cursorExclusive, pageable);
         } else {
-            page = messageRepository.findByConversationId(conversationId, pageable);
+            page = messageRepository.findByConversationIdWithSender(conversationId, pageable);
         }
 
         // Implicit delivery ack (not audited per message to avoid audit spam on
@@ -341,7 +344,28 @@ public class MessagingService {
         }
 
         final Page<Message> result = page;
-        return result.map(m -> MessageResponse.from(m, toAttachmentResponses(m.getId())));
+        // A14 N+1 fix: preload attachments for the whole page in one query
+        // (with file metadata fetched) instead of one query per message.
+        // Senders stay bounded by @BatchSize on Message.sender.
+        final Map<UUID, List<MessageResponse.AttachmentResponse>> attachmentsByMessage;
+        if (result.getContent().isEmpty()) {
+            attachmentsByMessage = Map.of();
+        } else {
+            List<UUID> messageIds = result.getContent().stream().map(Message::getId).toList();
+            attachmentsByMessage = attachmentRepository.findByMessageIdInWithFile(messageIds).stream()
+                    .collect(Collectors.groupingBy(
+                            a -> a.getMessage().getId(),
+                            Collectors.mapping(
+                                    a -> new MessageResponse.AttachmentResponse(
+                                            a.getId(),
+                                            a.getFile().getId(),
+                                            a.getFile().getOriginalFileName(),
+                                            a.getFile().getMimeType(),
+                                            a.getFile().getSize()),
+                                    Collectors.toList())));
+        }
+        return result.map(m -> MessageResponse.from(m,
+                attachmentsByMessage.getOrDefault(m.getId(), List.of())));
     }
 
     @Transactional(readOnly = true)

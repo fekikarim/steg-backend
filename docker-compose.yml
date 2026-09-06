@@ -1,0 +1,67 @@
+# Phase A14 — local/demo stack: backend + PostgreSQL 17.
+#
+# Usage:
+#   1. cp .env.example .env   (or export the variables below) and review secrets.
+#   2. docker compose up -d --build
+#   3. Seed the load-test admin (optional): see loadtest/seed.sql.
+#   4. API: http://localhost:8080 | docs: http://localhost:8080/swagger-ui.html
+#
+# The demo STEG_JWT_SECRET below is NOT production-grade: set a high-entropy
+# 256-bit+ value via environment/secret management before any shared hosting.
+# Flyway migrates automatically on backend startup (baseline-on-migrate).
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: steg-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${SPRING_DATASOURCE_USERNAME:-steg}
+      POSTGRES_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-stegdemo}
+      POSTGRES_DB: ${POSTGRES_DB:-stegdb}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SPRING_DATASOURCE_USERNAME:-steg} -d ${POSTGRES_DB:-stegdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: steg-backend:local
+    container_name: steg-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-stegdb}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-steg}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-stegdemo}
+      # Demo-only secret — override in real deployments (see docs/DEPLOYMENT.md).
+      STEG_JWT_SECRET: ${STEG_JWT_SECRET:-demo-only-not-for-production-rotate-me-0123456789abcdef}
+      JWT_ACCESS_EXP_MINUTES: ${JWT_ACCESS_EXP_MINUTES:-15}
+      JWT_REFRESH_EXP_DAYS: ${JWT_REFRESH_EXP_DAYS:-7}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:4200}
+      STORAGE_LOCAL_ROOT: /app/storage/uploads
+    volumes:
+      - storage:/app/storage/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  pgdata:
+  storage:

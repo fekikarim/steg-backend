@@ -9,6 +9,8 @@ import tn.steg.backend.workflow.domain.model.InternshipWorkflowInstance;
 import tn.steg.backend.workflow.domain.model.PaymentWorkflowInstance;
 import tn.steg.backend.workflow.domain.model.WorkflowInstance;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -26,4 +28,7 @@ public interface WorkflowInstanceJpaRepository extends JpaRepository<WorkflowIns
 
     @Query("SELECT wi FROM PaymentWorkflowInstance wi WHERE wi.financeCase.id = :financeCaseId")
     Optional<PaymentWorkflowInstance> findPaymentInstanceByFinanceCaseId(@Param("financeCaseId") UUID financeCaseId);
+
+    @Query("SELECT wi FROM PaymentWorkflowInstance wi WHERE wi.financeCase.id IN :financeCaseIds")
+    List<PaymentWorkflowInstance> findPaymentInstancesByFinanceCaseIdIn(@Param("financeCaseIds") Collection<UUID> financeCaseIds);
 }

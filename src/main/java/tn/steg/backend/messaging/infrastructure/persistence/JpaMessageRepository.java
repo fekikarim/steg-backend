@@ -23,6 +23,22 @@ public interface JpaMessageRepository
     @Query("select m from Message m where m.conversation.id = :conversationId")
     Page<Message> findByConversationId(@Param("conversationId") UUID conversationId, Pageable pageable);
 
+    /**
+     * A14 N+1 fix backing the domain port methods: sender fetched eagerly for
+     * history pages (single-valued join is pagination-safe; separate count).
+     */
+    @Query(value = "SELECT m FROM Message m LEFT JOIN FETCH m.sender WHERE m.conversation.id = :conversationId",
+           countQuery = "SELECT COUNT(m) FROM Message m WHERE m.conversation.id = :conversationId")
+    Page<Message> findByConversationIdWithSender(@Param("conversationId") UUID conversationId, Pageable pageable);
+
+    @Query(value = "SELECT m FROM Message m LEFT JOIN FETCH m.sender WHERE m.conversation.id = :conversationId "
+                 + "AND m.sequenceNumber <= :maxSequenceNumber",
+           countQuery = "SELECT COUNT(m) FROM Message m WHERE m.conversation.id = :conversationId "
+                      + "AND m.sequenceNumber <= :maxSequenceNumber")
+    Page<Message> findByConversationIdAndSequenceNumberLessThanEqualWithSender(
+            @Param("conversationId") UUID conversationId,
+            @Param("maxSequenceNumber") Long maxSequenceNumber, Pageable pageable);
+
     Page<Message> findByConversationIdAndSequenceNumberLessThanEqual(
             UUID conversationId, Long maxSequenceNumber, Pageable pageable);
 

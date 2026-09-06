@@ -21,6 +21,14 @@ public interface InternshipApplicationRepository extends JpaRepository<Internshi
     List<InternshipApplication> findByCandidateId(UUID candidateId);
 
     /**
+     * A14 N+1 fix: one query for the whole staff list, candidate + reviewer
+     * fetched eagerly (both are rendered by {@code ApplicationResponse}).
+     */
+    @Query("SELECT DISTINCT a FROM InternshipApplication a " +
+           "LEFT JOIN FETCH a.candidate LEFT JOIN FETCH a.reviewer")
+    List<InternshipApplication> findAllWithCandidate();
+
+    /**
      * Find an application by ID and verify it belongs to the given user (IDOR guard).
      * The join traverses application → candidate → user.
      */

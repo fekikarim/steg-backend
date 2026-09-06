@@ -28,6 +28,8 @@ import tn.steg.backend.workflow.domain.repository.WorkflowStepDefinitionReposito
 import tn.steg.backend.audit.application.AuditService;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
 import java.util.Map;
@@ -319,6 +321,26 @@ public class WorkflowService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "No workflow found for finance case: " + financeCaseId));
         return WorkflowInstanceResponse.from(instance);
+    }
+
+    /**
+     * A14 N+1 fix: bulk variant used by the finance-case list view — resolves
+     * payment workflow instance ids for a whole page in one query. Cases without
+     * an instance yet are simply absent from the map (same lenient semantics as
+     * the per-case lookup's catch branch in {@code FinanceService}).
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, UUID> paymentWorkflowInstanceIdsFor(Collection<UUID> financeCaseIds) {
+        if (financeCaseIds == null || financeCaseIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, UUID> ids = new HashMap<>();
+        for (PaymentWorkflowInstance instance : instanceRepository.findPaymentInstancesByFinanceCaseIdIn(financeCaseIds)) {
+            if (instance.getFinanceCase() != null) {
+                ids.put(instance.getFinanceCase().getId(), instance.getId());
+            }
+        }
+        return ids;
     }
 
     /**

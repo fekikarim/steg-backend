@@ -330,7 +330,8 @@ public class InternshipService {
     @Transactional(readOnly = true)
     public List<InternshipAssignmentResponse> listAssignments(UUID internshipId) {
         findInternshipOrThrow(internshipId);
-        return assignmentRepository.findByInternshipId(internshipId).stream()
+        // A14 N+1 fix: department/supervisor/assigner fetched in the query itself.
+        return assignmentRepository.findByInternshipIdWithDetails(internshipId).stream()
                 .map(InternshipAssignmentResponse::from)
                 .toList();
     }
@@ -341,7 +342,8 @@ public class InternshipService {
 
     @Transactional(readOnly = true)
     public List<InternshipResponse> listInternships() {
-        return internshipRepository.findAll().stream()
+        // A14 N+1 fix: candidate + application fetched in the list query itself.
+        return internshipRepository.findAllWithDetails().stream()
                 .map(InternshipResponse::from)
                 .toList();
     }

@@ -21,6 +21,13 @@ public interface FinanceCaseRepository {
     Optional<FinanceCase> findByInternshipId(UUID internshipId);
     Page<FinanceCase> findAll(Pageable pageable);
     Page<FinanceCase> findByStatus(FinanceCaseStatus status, Pageable pageable);
+    /**
+     * A14 N+1 fix: list-view variants fetching the linked internship eagerly.
+     * Single-valued fetch joins are pagination-safe (no row multiplication).
+     * The JPQL lives on the infrastructure adapter.
+     */
+    Page<FinanceCase> findAllWithInternship(Pageable pageable);
+    Page<FinanceCase> findByStatusWithInternship(FinanceCaseStatus status, Pageable pageable);
     FinanceCase save(FinanceCase financeCase);
     boolean existsByReference(String reference);
     long countByReferencePrefix(String prefix);

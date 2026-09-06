@@ -74,10 +74,12 @@ import java.time.LocalDate;
 import java.time.Year;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Application service for the finance pipeline (Phase A11): FinanceCase
@@ -186,10 +188,48 @@ public class FinanceService {
 
     @Transactional(readOnly = true)
     public Page<FinanceCaseResponse> listFinanceCases(FinanceCaseStatus status, Pageable pageable) {
+        // A14 N+1 fix: internship fetched in the page query itself (see port).
         Page<FinanceCase> page = status == null
-                ? financeCaseRepository.findAll(pageable)
-                : financeCaseRepository.findByStatus(status, pageable);
-        return page.map(this::toResponse);
+                ? financeCaseRepository.findAllWithInternship(pageable)
+                : financeCaseRepository.findByStatusWithInternship(status, pageable);
+        if (page.isEmpty()) {
+            return page.map(this::toResponse);
+        }
+        // A14 N+1 fix: preload every child collection for the whole page in
+        // five bulk queries (plus one batched internship load via @BatchSize)
+        // instead of ~6 queries per finance case. Identical output to the
+        // per-case assembly below.
+        List<UUID> caseIds = page.getContent().stream().map(FinanceCase::getId).toList();
+        Map<UUID, List<PaymentCalculation>> calculationsByCase = calculationRepository
+                .findAllByFinanceCaseIdInOrderByCalculationSequenceAsc(caseIds).stream()
+                .collect(Collectors.groupingBy(c -> c.getFinanceCase().getId()));
+        Map<UUID, List<FinanceCaseDocument>> documentsByCase = financeCaseDocumentRepository
+                .findByFinanceCaseIdInWithDetails(caseIds).stream()
+                .collect(Collectors.groupingBy(d -> d.getFinanceCase().getId()));
+        Map<UUID, List<PaymentApproval>> approvalsByCase = approvalRepository
+                .findByFinanceCaseIdInWithDecider(caseIds).stream()
+                .collect(Collectors.groupingBy(a -> a.getFinanceCase().getId()));
+        Map<UUID, String> receiptReferenceByCase = new HashMap<>();
+        for (PaymentReceipt receipt : receiptRepository.findByFinanceCaseIdIn(caseIds)) {
+            receiptReferenceByCase.put(receipt.getFinanceCase().getId(), receipt.getReference());
+        }
+        Map<UUID, UUID> workflowInstanceByCase = workflowService.paymentWorkflowInstanceIdsFor(caseIds);
+
+        return page.map(financeCase -> {
+            UUID caseId = financeCase.getId();
+            List<PaymentCalculation> history =
+                    calculationsByCase.getOrDefault(caseId, List.of());
+            PaymentCalculationResponse calculation = history.isEmpty() ? null
+                    : PaymentCalculationResponse.from(history.get(history.size() - 1));
+            List<FinanceCaseDocumentResponse> documents = documentsByCase
+                    .getOrDefault(caseId, List.of()).stream()
+                    .map(FinanceCaseDocumentResponse::from).toList();
+            List<PaymentApprovalResponse> approvals = approvalsByCase
+                    .getOrDefault(caseId, List.of()).stream()
+                    .map(PaymentApprovalResponse::from).toList();
+            return FinanceCaseResponse.from(financeCase, calculation, documents, approvals,
+                    receiptReferenceByCase.get(caseId), workflowInstanceByCase.get(caseId));
+        });
     }
 
     @Transactional(readOnly = true)

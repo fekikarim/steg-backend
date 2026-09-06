@@ -1,0 +1,126 @@
+# Phase A14 — backend CI: build, test, security scan, image publish.
+#
+# Required secrets (repository Settings → Secrets and variables → Actions):
+#   NVD_API_KEY   NVD API key for the OWASP dependency-check scan
+#                 (https://nvd.nist.gov/developers/request-an-api-key).
+#                 The scan job is skipped automatically while it is absent.
+# No secret is needed for GHCR publish: it uses the built-in GITHUB_TOKEN.
+#
+# Branch protection (configure on GitHub): require the `build-test` job to
+# pass before merging. `dependency-check` is informational until the key is
+# provisioned; `publish` runs only on main after tests pass.
+
+name: backend-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    name: build + full test suite (Testcontainers)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Verify Docker for Testcontainers
+        run: docker info
+
+      - name: Build and test
+        # Full suite incl. ArchUnit gates, IDOR guards, query-count gates and
+        # the OpenAPI contract test (which also emits target/openapi/openapi.json).
+        run: ./mvnw -B clean verify --no-transfer-progress
+
+      - name: Upload surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 14
+
+      - name: Upload OpenAPI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi.json
+          path: target/openapi/openapi.json
+          retention-days: 30
+
+  dependency-check:
+    name: OWASP dependency vulnerability scan
+    runs-on: ubuntu-latest
+    # Informational until NVD_API_KEY is provisioned: the step below skips
+    # gracefully without a key (Dependabot still proposes version bumps).
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: OWASP dependency-check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        # Fails the job on any known vulnerability of CVSS >= 7; the HTML
+        # report is always uploaded for triage of lower-severity findings.
+        run: |
+          if [ -z "$NVD_API_KEY" ]; then
+            echo "NVD_API_KEY not provisioned — skipping scan."
+            exit 0
+          fi
+          ./mvnw -B org.owasp:dependency-check-maven:check \
+            -DnvdApiKey="$NVD_API_KEY" \
+            -DfailOnCVSS=7 \
+            --no-transfer-progress
+
+      - name: Upload dependency-check report
+        if: always() && hashFiles('target/dependency-check-report.html') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: target/dependency-check-report.html
+          retention-days: 30
+
+  publish:
+    name: build + publish image (main only)
+    runs-on: ubuntu-latest
+    needs: [build-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/steg-backend:latest
+            ghcr.io/${{ github.repository_owner }}/steg-backend:${{ github.sha }}

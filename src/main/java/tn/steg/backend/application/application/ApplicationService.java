@@ -100,15 +100,14 @@ public class ApplicationService {
     @Transactional(readOnly = true)
     public List<ApplicationResponse> listApplications(UserPrincipal actor) {
         if (actor.hasRole("ADMIN") || actor.hasRole("HR")) {
-            return applicationRepository.findAll().stream()
+            // A14 N+1 fix: candidate + reviewer fetched in the list query itself.
+            return applicationRepository.findAllWithCandidate().stream()
                     .map(ApplicationResponse::from)
                     .toList();
         }
 
-        // CANDIDATE — find their candidate record then filter
-        return candidateRepository.findAll().stream()
-                .filter(c -> c.getUser() != null && c.getUser().getId().equals(actor.getId()))
-                .findFirst()
+        // CANDIDATE — direct lookup by user instead of scanning the whole table.
+        return candidateRepository.findByUserId(actor.getId())
                 .map(candidate -> applicationRepository.findByCandidateId(candidate.getId()).stream()
                         .map(ApplicationResponse::from)
                         .toList())

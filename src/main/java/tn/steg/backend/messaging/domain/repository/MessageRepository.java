@@ -21,6 +21,14 @@ public interface MessageRepository {
     Page<Message> findByConversationId(UUID conversationId, Pageable pageable);
     Page<Message> findByConversationIdAndSequenceNumberLessThanEqual(
             UUID conversationId, Long maxSequenceNumber, Pageable pageable);
+    /**
+     * A14 N+1 fix: history-page variants fetching the sender eagerly. The sender
+     * is rendered per message; single-valued fetch joins stay pagination-safe.
+     * The JPQL lives on the infrastructure adapter.
+     */
+    Page<Message> findByConversationIdWithSender(UUID conversationId, Pageable pageable);
+    Page<Message> findByConversationIdAndSequenceNumberLessThanEqualWithSender(
+            UUID conversationId, Long maxSequenceNumber, Pageable pageable);
     List<Message> findByConversationIdAndSequenceNumberGreaterThanOrderBySequenceNumberAsc(
             UUID conversationId, Long afterSequence);
     List<Message> findByConversationIdAndSequenceNumberLessThanEqualOrderBySequenceNumberAsc(

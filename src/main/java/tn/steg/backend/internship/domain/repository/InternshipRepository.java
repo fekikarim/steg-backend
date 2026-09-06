@@ -9,6 +9,11 @@ import java.util.UUID;
 
 public interface InternshipRepository {
     List<Internship> findAll();
+    /**
+     * A14 N+1 fix: staff list views render candidate name + application id per
+     * row. Fetch both associations in the single list query.
+     */
+    List<Internship> findAllWithDetails();
     Optional<Internship> findById(UUID id);
 
     /**

@@ -8,6 +8,8 @@ import tn.steg.backend.workflow.domain.model.PaymentWorkflowInstance;
 import tn.steg.backend.workflow.domain.model.WorkflowInstance;
 import tn.steg.backend.workflow.domain.repository.WorkflowInstanceRepository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -39,6 +41,14 @@ public class WorkflowInstancePersistenceAdapter implements WorkflowInstanceRepos
     @Override
     public Optional<PaymentWorkflowInstance> findPaymentInstanceByFinanceCaseId(UUID financeCaseId) {
         return jpaRepository.findPaymentInstanceByFinanceCaseId(financeCaseId);
+    }
+
+    @Override
+    public List<PaymentWorkflowInstance> findPaymentInstancesByFinanceCaseIdIn(Collection<UUID> financeCaseIds) {
+        if (financeCaseIds == null || financeCaseIds.isEmpty()) {
+            return List.of();
+        }
+        return jpaRepository.findPaymentInstancesByFinanceCaseIdIn(financeCaseIds);
     }
 
     @Override
