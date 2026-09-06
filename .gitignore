@@ -58,8 +58,11 @@ hs_err_pid*
 replay_pid*
 
 # Environments #
+# .env holds real local secrets and must never be committed. .env.example is
+# the tracked template with placeholders only (no secret material).
 .env
 .env.*
+!.env.example
 
 # Local overrides #
 application-local.yml

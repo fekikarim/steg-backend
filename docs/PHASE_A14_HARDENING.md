@@ -14,7 +14,7 @@
 | Check | Result |
 |---|---|
 | Explicit authorization on all endpoints | PASS — `MethodSecurityFitnessTest` (deny-by-default ArchUnit gate) green; every `@RestController` method carries `@PreAuthorize`/`@Secured`/`@RolesAllowed` or `@PublicEndpoint`. Runtime counterpart added: `PublicEndpointConsistencyTest` (3/3) proves register/login/refresh/universities answer anonymously (400 on bad bodies, not 401) while audit/logout/finance-cases demand credentials. |
-| No secrets committed | PASS with one triaged fixture — `git grep` over tracked files finds no private keys, tokens, or passwords. The only secret-shaped committed values are the **test-profile-only** JWT key (`src/test/resources/application-test.yml`, ephemeral testcontainers DBs) and dummy `application-local.yml.example` values. Production fails fast without `STEG_JWT_SECRET` (no default), so no fallback exists. |
+| No secrets committed | PASS with triaged fixtures — `git grep` over tracked files finds no private keys, tokens, or passwords. Secret-shaped committed values: the **test-profile-only** JWT key (`src/test/resources/application-test.yml`, ephemeral testcontainers DBs) and dummy `application-local.yml.example` values. A post-push GitGuardian alert on demo defaults in `docker-compose.yml` (`stegdemo` DB password, placeholder JWT secret) was remediated the same day: secrets are now **required with no defaults** (`${VAR:?…}` fail-fast), and a placeholder-only `.env.example` is tracked (real `.env` stays git-ignored). Production fails fast without `STEG_JWT_SECRET`, so no fallback exists anywhere. |
 | Dependency vulnerability scan | EXECUTED via OSV (Maven Central unreachable from this host, so the OWASP plugin binary could not be downloaded; NVD API reachable). All 286 resolved artifacts queried: **2 packages / 4 advisories**, both triaged below. CI runs dependency-check gated on CVSS ≥ 7 once `NVD_API_KEY` is provisioned; Dependabot added for automated bumps. |
 | Password/token handling | PASS (reviewed, unchanged): BCrypt hashing, refresh tokens stored as hashes only and rotated per use, 10/min/IP login gate, 5-strike lockout, HS512 access tokens, auth failure messages static (no user enumeration beyond invalid-credentials). |
 | Cross-module IDOR | **1 real finding fixed** (see §2) + fresh `CrossModuleIdorTest` (3/3) for internships, evaluations, finance cases. Pre-existing guards re-verified intact: applications, messaging, documents, candidates, certificates. |
@@ -86,7 +86,7 @@ Auth scenario stays under the login gate by design. Full numbers: `loadtest/BASE
   runtime, non-root user, curl healthcheck on public `/actuator/health`): **built
   successfully** (`steg-backend:local`).
 - `docker-compose.yml` (backend + `postgres:17-alpine`, `pg_isready` + actuator
-  healthchecks, named volumes, env-driven config with demo defaults): `config`
+  healthchecks, named volumes, env-driven config with fail-fast required secrets): `config`
   valid, **stack reached `healthy/healthy`**, Flyway migrated V1–V25 on the fresh
   volume, and smoke register→login→authenticated calls passed against the
   prod-profile container. k6 baselines above ran against this stack.
