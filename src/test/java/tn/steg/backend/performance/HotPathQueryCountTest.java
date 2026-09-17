@@ -176,7 +176,7 @@ class HotPathQueryCountTest {
     }
 
     @Test
-    @DisplayName("V25 hot-path indexes are present in the database")
+    @DisplayName("V25 and V31 hot-path indexes are present in the database")
     void hotPathIndexesArePresent() {
         List<String> actual = entityManager
                 .createNativeQuery("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",
@@ -185,6 +185,10 @@ class HotPathQueryCountTest {
                 .contains("idx_wf_inst_finance_case_id");
         assertThat(actual).as("V25 composite index for active-assignment lookups")
                 .contains("idx_assignments_internship_status");
+        assertThat(actual).as("V31 composite index for journal entries date range")
+                .contains("idx_journal_entries_journal_date");
+        assertThat(actual).as("V31 composite index for journal entries status and date range")
+                .contains("idx_journal_entries_journal_status_date");
     }
 
     @Test
