@@ -47,6 +47,14 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
     private final JwtService jwtService;
     private final MessagingService messagingService;
 
+    private static final java.util.Set<String> STAFF_ROLES = java.util.Set.of(
+            "ROLE_ADMIN",
+            "ROLE_HR",
+            "ROLE_FINANCE",
+            "ROLE_DIRECTOR",
+            "ROLE_SUPERVISOR"
+    );
+
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
@@ -65,19 +73,40 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
         }
 
         if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
-            UUID conversationId = conversationTopic(accessor.getDestination());
-            if (conversationId != null) {
+            String destination = accessor.getDestination();
+            if (destination != null && destination.startsWith(CONVERSATION_TOPIC_PREFIX)) {
+                UUID conversationId = conversationTopic(destination);
                 UserPrincipal principal = currentPrincipal(accessor);
-                if (principal == null
+                if (conversationId == null || principal == null
                         || !messagingService.isConversationVisible(conversationId, principal.getId())) {
-                    // Generic message: unknown ids and forbidden ids are
-                    // indistinguishable to the subscriber.
-                    log.debug("STOMP SUBSCRIBE denied for conversation topic");
+                    log.debug("STOMP SUBSCRIBE denied for conversation topic: destination={}", destination);
                     throw new AccessDeniedException("You are not an active member of this conversation.");
                 }
             }
+
+            if (destination != null && (destination.startsWith("/topic/backoffice/") || destination.equals("/topic/backoffice"))) {
+                UserPrincipal principal = currentPrincipal(accessor);
+                if (principal == null || !isStaff(principal)) {
+                    log.debug("STOMP SUBSCRIBE denied for backoffice topic: destination={}, user={}",
+                            destination, principal != null ? principal.getEmail() : "anonymous");
+                    throw new AccessDeniedException("Access denied to back-office topic.");
+                }
+            }
+
+            if ("/topic".equals(destination) || "/topic/".equals(destination)) {
+                throw new AccessDeniedException("Subscription to root topic destination is prohibited.");
+            }
         }
         return message;
+    }
+
+    private boolean isStaff(UserPrincipal principal) {
+        if (principal == null || principal.getRoles() == null) {
+            return false;
+        }
+        return principal.getRoles().stream()
+                .map(r -> r.startsWith("ROLE_") ? r.toUpperCase() : "ROLE_" + r.toUpperCase())
+                .anyMatch(STAFF_ROLES::contains);
     }
 
     private UUID conversationTopic(String destination) {

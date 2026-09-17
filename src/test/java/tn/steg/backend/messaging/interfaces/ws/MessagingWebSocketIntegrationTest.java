@@ -102,6 +102,9 @@ class MessagingWebSocketIntegrationTest {
     @Autowired
     private JwtService jwtService;
 
+    @Autowired
+    private org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate;
+
     private final java.net.http.HttpClient httpClient = java.net.http.HttpClient.newHttpClient();
 
     private User internUser;
@@ -400,6 +403,61 @@ class MessagingWebSocketIntegrationTest {
         assertThat(error).isNotNull();
         assertThat(error.get("code").asText()).isEqualTo("ACCESS_DENIED");
         assertThat(supervisorInbox.poll(3, TimeUnit.SECONDS)).isNull();
+    }
+
+    @Test
+    @DisplayName("E4: candidate subscription to /topic/backoffice is denied server-side; staff subscription succeeds")
+    void candidateBackofficeSubscriptionIsDeniedServerSide() throws Exception {
+        BlockingQueue<JsonNode> candidateInbox = new ArrayBlockingQueue<>(10);
+        BlockingQueue<JsonNode> supervisorInbox = new ArrayBlockingQueue<>(10);
+
+        StompSession candidateSession = connect(stompClient(), outsiderToken);
+        StompSession supervisorSession = connect(stompClient(), supervisorToken);
+        sessions.add(candidateSession);
+        sessions.add(supervisorSession);
+
+        // Candidate attempts unauthorized backoffice subscription (denied server-side by interceptor)
+        candidateSession.subscribe("/topic/backoffice/applications", frame(candidateInbox));
+        // Supervisor (staff) subscription succeeds
+        supervisorSession.subscribe("/topic/backoffice/applications", frame(supervisorInbox));
+        Thread.sleep(500);
+
+        // Broadcast backoffice event
+        UUID testEntityId = UUID.randomUUID();
+        messagingTemplate.convertAndSend("/topic/backoffice/applications",
+                (Object) java.util.Map.of(
+                        "action", "submitted",
+                        "entityType", "InternshipApplication",
+                        "entityId", testEntityId.toString()
+                ));
+
+        // Supervisor receives event
+        JsonNode receivedBySupervisor = supervisorInbox.poll(10, TimeUnit.SECONDS);
+        assertThat(receivedBySupervisor).isNotNull();
+        assertThat(receivedBySupervisor.get("action").asText()).isEqualTo("submitted");
+        assertThat(receivedBySupervisor.get("entityId").asText()).isEqualTo(testEntityId.toString());
+
+        // Candidate receives NOTHING (subscription refused server-side)
+        assertThat(candidateInbox.poll(3, TimeUnit.SECONDS)).isNull();
+    }
+
+    @Test
+    @DisplayName("E4: reconnect re-evaluates authorization; invalid credentials cannot reconnect")
+    void reconnectReevaluatesAuthorizationWithFreshToken() throws Exception {
+        // 1. Initial connection with valid candidate token
+        StompSession initialSession = connect(stompClient(), internToken);
+        assertThat(initialSession.isConnected()).isTrue();
+        initialSession.disconnect();
+
+        // 2. Reconnect with invalid token fails
+        WebSocketStompClient client = stompClient();
+        assertThatThrownBy(() -> connect(client, "invalid.jwt.token"))
+                .isNotNull();
+
+        // 3. Reconnect with valid supervisor token succeeds
+        StompSession supervisorSession = connect(stompClient(), supervisorToken);
+        sessions.add(supervisorSession);
+        assertThat(supervisorSession.isConnected()).isTrue();
     }
 
     @SuppressWarnings("deprecation")
