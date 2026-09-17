@@ -82,10 +82,26 @@ public class AnonymousApplicationController {
             case WITHDRAWN -> "No further action required.";
         };
 
-        var timeline = List.of(
-                "Created: " + app.getCreatedAt(),
-                app.getSubmissionDate() != null ? "Submitted: " + app.getSubmissionDate() : ""
-        );
+        var timeline = new java.util.ArrayList<String>();
+        timeline.add("Created: " + app.getCreatedAt());
+        if (app.getSubmissionDate() != null) {
+            timeline.add("Submitted: " + app.getSubmissionDate());
+        }
+        if (app.getStatus() == ApplicationStatus.UNDER_REVIEW ||
+            app.getStatus() == ApplicationStatus.NEEDS_CORRECTION ||
+            app.getStatus() == ApplicationStatus.ACCEPTED ||
+            app.getStatus() == ApplicationStatus.REJECTED) {
+            timeline.add("Under Review: " + (app.getUpdatedAt() != null ? app.getUpdatedAt() : app.getSubmissionDate()));
+        }
+        if (app.getStatus() == ApplicationStatus.NEEDS_CORRECTION) {
+            timeline.add("Additional Information Requested: " + app.getUpdatedAt());
+        } else if (app.getStatus() == ApplicationStatus.ACCEPTED) {
+            timeline.add("Accepted: " + app.getUpdatedAt());
+        } else if (app.getStatus() == ApplicationStatus.REJECTED) {
+            timeline.add("Decision Recorded: " + app.getUpdatedAt());
+        } else if (app.getStatus() == ApplicationStatus.WITHDRAWN) {
+            timeline.add("Withdrawn: " + app.getUpdatedAt());
+        }
 
         // E3: real document summary from linked application documents
         // (type + verification status only — no file names, no content).
