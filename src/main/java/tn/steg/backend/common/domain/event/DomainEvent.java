@@ -16,6 +16,7 @@ import java.util.UUID;
 public sealed interface DomainEvent
         permits ApplicationAcceptedEvent,
         ApplicationRejectedEvent,
+        ApplicationSubmittedEvent,
         InternshipAssignedEvent,
         DocumentVerifiedEvent,
         TaskAssignedEvent,

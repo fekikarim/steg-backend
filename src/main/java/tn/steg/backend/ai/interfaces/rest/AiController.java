@@ -57,7 +57,7 @@ public class AiController {
     }
 
     @PostMapping("/assistant/query")
-    @PreAuthorize("hasRole('CANDIDATE')")
+    @PreAuthorize("hasAnyRole('CANDIDATE', 'INTERN', 'SUPERVISOR')")
     @RateLimited(name = "ai-assistant", limit = 20, windowSeconds = 60)
     @Operation(summary = "Candidate virtual assistant Q&A (Strictly candidate-scoped)")
     public ResponseEntity<AiAnalysisResultResponse> queryAssistant(

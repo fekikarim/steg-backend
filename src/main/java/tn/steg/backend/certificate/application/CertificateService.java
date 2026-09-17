@@ -12,6 +12,7 @@ import tn.steg.backend.certificate.application.dto.CertificateResponse;
 import tn.steg.backend.certificate.domain.model.Certificate;
 import tn.steg.backend.certificate.domain.model.CertificateStatus;
 import tn.steg.backend.certificate.domain.repository.CertificateRepository;
+import tn.steg.backend.common.application.idempotency.IdempotencyService;
 import tn.steg.backend.common.domain.event.CertificateAvailableEvent;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
@@ -81,6 +82,7 @@ public class CertificateService {
     private final DocumentVersionRepository documentVersionRepository;
     private final FileStorageService fileStorageService;
     private final AuditService auditService;
+    private final IdempotencyService idempotencyService;
     private final ApplicationEventPublisher eventPublisher;
     private final PdfTemplateProvider templateProvider;
     private final OfficialBrandingProvider brandingProvider;
@@ -109,6 +111,14 @@ public class CertificateService {
      */
     @Transactional
     public CertificateResponse generateCertificate(UUID internshipId, UserPrincipal actor) {
+        // E1.6: duplicate submissions (double-click, mobile retry) replay the stored
+        // response instead of generating a second certificate.
+        return idempotencyService.execute(actor.getId(),
+                IdempotencyService.currentKey().orElse(null),
+                () -> doGenerateCertificate(internshipId, actor), CertificateResponse.class);
+    }
+
+    private CertificateResponse doGenerateCertificate(UUID internshipId, UserPrincipal actor) {
         // Internship row lock first: concurrent generations for the same
         // internship serialize, so the existence check below is race-free.
         Internship internship = internshipRepository.findByIdForUpdate(internshipId)

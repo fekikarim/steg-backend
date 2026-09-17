@@ -18,6 +18,8 @@ public interface InternshipApplicationRepository {
     boolean existsByReference(String reference);
     List<InternshipApplication> findByCandidateId(UUID candidateId);
     Optional<InternshipApplication> findByIdAndCandidateUserId(UUID id, UUID userId);
+    boolean existsByCandidateId(UUID candidateId);
+    Optional<InternshipApplication> findByTrackingTokenHash(String trackingTokenHash);
     long countByReferencePrefix(String prefix);
     InternshipApplication save(InternshipApplication application);
 }

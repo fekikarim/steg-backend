@@ -47,10 +47,10 @@ public class ApplicationController {
                 .body(applicationService.createApplication(request, principal));
     }
 
-    @PreAuthorize("@authz.hasAnyRole('CANDIDATE', 'ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasAnyRole('CANDIDATE', 'ADMIN', 'HR', 'SUPERVISOR', 'FINANCE', 'DIRECTOR')")
     @GetMapping
     @Operation(summary = "List applications",
-               description = "CANDIDATE sees their own; ADMIN/HR see all.")
+               description = "CANDIDATE sees their own; staff see all.")
     public ResponseEntity<List<ApplicationResponse>> listApplications(
             @AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(applicationService.listApplications(principal));
@@ -60,10 +60,10 @@ public class ApplicationController {
     // Detail & mutation
     // -------------------------------------------------------------------------
 
-    @PreAuthorize("@authz.hasAnyRole('CANDIDATE', 'ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasAnyRole('CANDIDATE', 'ADMIN', 'HR', 'SUPERVISOR', 'FINANCE', 'DIRECTOR')")
     @GetMapping("/{id}")
     @Operation(summary = "Get application by ID",
-               description = "CANDIDATE can only access their own; ADMIN/HR can access any.")
+               description = "CANDIDATE can only access their own; staff can access any.")
     public ResponseEntity<ApplicationResponse> getApplication(
             @PathVariable UUID id,
             @AuthenticationPrincipal UserPrincipal principal) {

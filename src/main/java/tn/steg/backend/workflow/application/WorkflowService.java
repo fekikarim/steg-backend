@@ -301,13 +301,23 @@ public class WorkflowService {
 
     /**
      * Returns the current workflow state for an application.
+     * IDOR: candidates may only read their own application's state; staff
+     * (ADMIN/HR) may read any. Unknown/other-owned ids yield 404 without
+     * revealing existence (B6 hardening).
      */
     @Transactional(readOnly = true)
-    public WorkflowInstanceResponse getApplicationWorkflowState(UUID applicationId) {
+    public WorkflowInstanceResponse getApplicationWorkflowState(UUID applicationId, UserPrincipal actor) {
         ApplicationWorkflowInstance instance = instanceRepository
                 .findApplicationInstanceByApplicationId(applicationId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "No workflow found for application: " + applicationId));
+        if (!actor.hasRole("ADMIN") && !actor.hasRole("HR")) {
+            UUID ownerId = instance.getApplication().getCandidate().getUser().getId();
+            if (!ownerId.equals(actor.getId())) {
+                throw new ResourceNotFoundException(
+                        "No workflow found for application: " + applicationId);
+            }
+        }
         return WorkflowInstanceResponse.from(instance);
     }
 
@@ -345,13 +355,23 @@ public class WorkflowService {
 
     /**
      * Returns the current workflow state for an internship.
+     * IDOR: candidates may only read their own internship's state (mirrors the
+     * application variant); staff (ADMIN/HR) may read any. Unknown/other-owned
+     * ids yield 404 without revealing existence.
      */
     @Transactional(readOnly = true)
-    public WorkflowInstanceResponse getInternshipWorkflowState(UUID internshipId) {
+    public WorkflowInstanceResponse getInternshipWorkflowState(UUID internshipId, UserPrincipal actor) {
         InternshipWorkflowInstance instance = instanceRepository
                 .findInternshipInstanceByInternshipId(internshipId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "No workflow found for internship: " + internshipId));
+        if (!actor.hasRole("ADMIN") && !actor.hasRole("HR")) {
+            UUID ownerId = instance.getInternship().getCandidate().getUser().getId();
+            if (!ownerId.equals(actor.getId())) {
+                throw new ResourceNotFoundException(
+                        "No workflow found for internship: " + internshipId);
+            }
+        }
         return WorkflowInstanceResponse.from(instance);
     }
 

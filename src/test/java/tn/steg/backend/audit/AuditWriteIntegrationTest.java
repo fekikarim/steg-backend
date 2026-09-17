@@ -145,7 +145,7 @@ class AuditWriteIntegrationTest {
     void applicationAcceptanceIsAudited() {
         var applicationId = applicationService.createApplication(
                 new ApplicationCreateRequest(LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31),
-                        "PFE Audit Theme", true), candidateActor).id();
+                        true), candidateActor).id();
         applicationService.submitApplication(applicationId, candidateActor);
         workflowService.transitionApplication(applicationId,
                 new WorkflowTransitionRequest("UNDER_REVIEW", WorkflowActionType.VALIDATION, null, null), admin);

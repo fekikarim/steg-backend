@@ -53,8 +53,8 @@ public class InternshipApplication extends BaseEntity {
     @Column(name = "requirement", length = 50)
     private InternshipRequirement requirement;
 
-    @Column(name = "proposed_theme", columnDefinition = "TEXT")
-    private String proposedTheme;
+    @Column(name = "tracking_token_hash", length = 128, unique = true)
+    private String trackingTokenHash;
 
     @Column(name = "rejection_reason", columnDefinition = "TEXT")
     private String rejectionReason;

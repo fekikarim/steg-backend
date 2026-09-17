@@ -2,9 +2,9 @@ package tn.steg.backend.application.application;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.stereotype.Service;import org.springframework.transaction.annotation.Transactional;
 import tn.steg.backend.application.application.dto.ApplicationCreateRequest;
 import tn.steg.backend.application.application.dto.ApplicationResponse;
 import tn.steg.backend.application.application.dto.ApplicationUpdateRequest;
@@ -13,9 +13,13 @@ import tn.steg.backend.application.domain.model.InternshipApplication;
 import tn.steg.backend.application.domain.repository.InternshipApplicationRepository;
 import tn.steg.backend.candidate.domain.model.Candidate;
 import tn.steg.backend.candidate.domain.repository.CandidateRepository;
+import tn.steg.backend.common.application.idempotency.IdempotencyService;
+import tn.steg.backend.common.domain.event.ApplicationSubmittedEvent;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.internship.domain.service.InternshipClassificationResult;
+import tn.steg.backend.internship.domain.service.InternshipClassificationService;
 import tn.steg.backend.organization.domain.repository.EmployeeRepository;
 import tn.steg.backend.workflow.application.WorkflowService;
 import tn.steg.backend.audit.application.AuditService;
@@ -49,20 +53,31 @@ public class ApplicationService {
     private final CandidateRepository candidateRepository;
     private final EmployeeRepository employeeRepository;
     private final AuditService auditService;
+    private final IdempotencyService idempotencyService;
+
+    /** Business facts for cross-cutting concerns; never a dependency on consumers. */
+    private final ApplicationEventPublisher eventPublisher;
 
     /** Lazy to avoid circular dependency: WorkflowService → UserRepository → ApplicationService chain. */
     @Lazy
     private final WorkflowService workflowService;
 
+    /** Pure derivation engine (E1.1): clients receive calculatedType/requirement read-only. */
+    private final InternshipClassificationService classificationService = new InternshipClassificationService();
+
     public ApplicationService(InternshipApplicationRepository applicationRepository,
-                               CandidateRepository candidateRepository,
-                               EmployeeRepository employeeRepository,
-                               AuditService auditService,
-                               @Lazy WorkflowService workflowService) {
+                                CandidateRepository candidateRepository,
+                                EmployeeRepository employeeRepository,
+                                AuditService auditService,
+                                IdempotencyService idempotencyService,
+                                ApplicationEventPublisher eventPublisher,
+                                @Lazy WorkflowService workflowService) {
         this.applicationRepository = applicationRepository;
         this.candidateRepository   = candidateRepository;
         this.employeeRepository    = employeeRepository;
         this.auditService          = auditService;
+        this.idempotencyService    = idempotencyService;
+        this.eventPublisher        = eventPublisher;
         this.workflowService       = workflowService;
     }
 
@@ -76,14 +91,18 @@ public class ApplicationService {
     @Transactional
     public ApplicationResponse createApplication(ApplicationCreateRequest request, UserPrincipal actor) {
         Candidate candidate = findCandidateByUserOrThrow(actor.getId());
+        if (applicationRepository.existsByCandidateId(candidate.getId())) {
+            throw new BusinessRuleException("APPLICATION_ALREADY_EXISTS",
+                    "A candidate can only have one application. Please wait until the next session.");
+        }
         String reference = generateReference();
 
         InternshipApplication application = new InternshipApplication(
                 reference, candidate, ApplicationStatus.DRAFT);
         application.setDesiredStartDate(request.desiredStartDate());
         application.setDesiredEndDate(request.desiredEndDate());
-        application.setProposedTheme(request.proposedTheme());
         application.setSubmittedOnline(request.submittedOnline() != null ? request.submittedOnline() : true);
+        refreshDerivedClassification(application);
 
         application = applicationRepository.save(application);
         log.info("Application created: ref={} by candidate={}", reference, candidate.getId());
@@ -137,17 +156,18 @@ public class ApplicationService {
 
         application.setDesiredStartDate(request.desiredStartDate());
         application.setDesiredEndDate(request.desiredEndDate());
-        application.setProposedTheme(request.proposedTheme());
         if (request.submittedOnline() != null) {
             application.setSubmittedOnline(request.submittedOnline());
         }
+        refreshDerivedClassification(application);
 
         application = applicationRepository.save(application);
         log.info("Application updated: id={}", id);
+        Map<String, Object> newValues = new java.util.LinkedHashMap<>();
+        newValues.put("desiredStartDate", application.getDesiredStartDate());
+        newValues.put("desiredEndDate", application.getDesiredEndDate());
         auditService.log("APPLICATION_UPDATED", "InternshipApplication", id, null,
-                Map.of("desiredStartDate", application.getDesiredStartDate(),
-                        "desiredEndDate", application.getDesiredEndDate(),
-                        "proposedTheme", application.getProposedTheme()), actor.getId(), null);
+                newValues, actor.getId(), null);
         return ApplicationResponse.from(application);
     }
 
@@ -161,12 +181,21 @@ public class ApplicationService {
      */
     @Transactional
     public ApplicationResponse submitApplication(UUID id, UserPrincipal actor) {
+        // E1.6: duplicate submits replay the stored response instead of spawning
+        // a second workflow instance.
+        return idempotencyService.execute(actor.getId(),
+                IdempotencyService.currentKey().orElse(null),
+                () -> doSubmitApplication(id, actor), ApplicationResponse.class);
+    }
+
+    private ApplicationResponse doSubmitApplication(UUID id, UserPrincipal actor) {
         InternshipApplication application = resolveOwnCandidateApplicationOrThrow(id, actor);
 
         validateTransition(application, ApplicationStatus.DRAFT, ApplicationStatus.SUBMITTED);
 
         application.setStatus(ApplicationStatus.SUBMITTED);
         application.setSubmissionDate(LocalDate.now());
+        refreshDerivedClassification(application);
 
         application = applicationRepository.save(application);
 
@@ -177,6 +206,10 @@ public class ApplicationService {
         auditService.log("APPLICATION_SUBMITTED", "InternshipApplication", id,
                 Map.of("status", ApplicationStatus.DRAFT.toString()),
                 Map.of("status", ApplicationStatus.SUBMITTED.toString()), actor.getId(), null);
+        // E2: submission confirmation (in-app + email) for the candidate.
+        eventPublisher.publishEvent(new ApplicationSubmittedEvent(
+                application.getId(), application.getReference(),
+                application.getCandidate().getUser().getId(), actor.getId()));
         return ApplicationResponse.from(application);
     }
 
@@ -243,10 +276,29 @@ public class ApplicationService {
     // -------------------------------------------------------------------------
 
     /**
+     * E1.1: derives type/requirement from the requested dates and stores them on the
+     * application as read-only values for clients. Academic level is not captured at
+     * application time (see matrix), so the level hint is null here; the definitive
+     * classification happens at internship creation. Never throws: dates are optional
+     * on a DRAFT and invalid ranges are rejected by validation, not here.
+     */
+    private void refreshDerivedClassification(InternshipApplication application) {
+        if (application.getDesiredStartDate() == null || application.getDesiredEndDate() == null) {
+            return;
+        }
+        if (application.getDesiredEndDate().isBefore(application.getDesiredStartDate())) {
+            return;
+        }
+        InternshipClassificationResult derived = classificationService.classify(
+                application.getDesiredStartDate(), application.getDesiredEndDate(), null, null);
+        application.setCalculatedType(derived.type());
+        application.setRequirement(derived.requirement());
+    }
+
+    /**
      * Generates a server-side reference in format {@code APP-YYYY-NNNNN}.
      */
-    private String generateReference() {
-        int year = Year.now().getValue();
+    private String generateReference() {        int year = Year.now().getValue();
         String prefix = "APP-" + year + "-";
         long count = applicationRepository.countByReferencePrefix(prefix);
         return String.format("%s%05d", prefix, count + 1);

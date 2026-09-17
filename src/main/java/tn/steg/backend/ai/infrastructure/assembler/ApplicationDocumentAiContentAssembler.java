@@ -54,9 +54,6 @@ public class ApplicationDocumentAiContentAssembler implements ApplicationDocumen
         if (app.getDesiredStartDate() != null && app.getDesiredEndDate() != null) {
             promptParts.add("Période souhaitée: du " + app.getDesiredStartDate() + " au " + app.getDesiredEndDate());
         }
-        if (app.getProposedTheme() != null && !app.getProposedTheme().isBlank()) {
-            promptParts.add("Thème proposé par le candidat: " + app.getProposedTheme());
-        }
 
         StringBuilder docSummary = new StringBuilder();
         docSummary.append("Documents non restreints vérifiés dans le dossier (").append(eligibleDocs.size()).append("):\n");

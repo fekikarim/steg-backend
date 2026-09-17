@@ -1,0 +1,28 @@
+# E0.4 — `clean` profile: migrations only, empty database. Production-like.
+# Flyway validates + migrates schema (V1–V27 structure). No demo seeder runs here
+# (IntegrationDemoSeeder is @Profile("integration") only). Use for E2 clean-DB runs,
+# E10 migration validation and the E11 final gate.
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:20}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+  jpa:
+    show-sql: false
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    validate-on-migrate: true
+
+logging:
+  level:
+    root: INFO
+    tn.steg.backend: INFO
+
+steg:
+  seed:
+    demo-enabled: false

@@ -3,6 +3,10 @@ spring:
     name: steg-backend
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:local}
+  messages:
+    basename: messages/messages
+    encoding: UTF-8
+    fallback-to-system-locale: false
 
   # JPA & Hibernate Defaults
   jpa:
@@ -41,6 +45,17 @@ spring:
           connectiontimeout: ${SMTP_CONNECTION_TIMEOUT_MILLIS:5000}
           timeout: ${SMTP_READ_TIMEOUT_MILLIS:10000}
           writetimeout: ${SMTP_WRITE_TIMEOUT_MILLIS:10000}
+
+  # Multipart upload ceiling. This is a coarse transport guard only: the
+  # authoritative per-DocumentType caps live in DocumentValidationService
+  # (10 MB default, 15 MB demo image, 25 MB internship report). The ceiling
+  # must stay above the largest domain cap so oversized files always reach
+  # domain validation and receive a useful FILE_TOO_LARGE (422/413) error
+  # instead of dying at the servlet layer.
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 25MB
 
 
 # Management & Observability (Actuator)
@@ -165,3 +180,12 @@ steg:
     timeout-ms: ${AI_TIMEOUT_MS:10000}
     max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:2048}
     temperature: ${AI_TEMPERATURE:0.2}
+  # Python document-intelligence (FastAPI). Empty base-url/token = disabled (degraded, never blocking).
+  python:
+    base-url: ${PYTHON_AI_SERVICE_BASE_URL:}
+    service-token: ${PYTHON_AI_SERVICE_TOKEN:}
+    timeout-ms: ${PYTHON_AI_TIMEOUT_MS:15000}
+    max-attempts: ${PYTHON_AI_MAX_ATTEMPTS:2}
+    circuit-breaker-threshold: ${PYTHON_AI_CIRCUIT_THRESHOLD:5}
+    max-pages: ${PYTHON_AI_MAX_PAGES:20}
+    max-bytes: ${PYTHON_AI_MAX_BYTES:26214400}

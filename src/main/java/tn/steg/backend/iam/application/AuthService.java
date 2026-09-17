@@ -2,6 +2,8 @@ package tn.steg.backend.iam.application;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.MessageSource;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,6 +46,7 @@ public class AuthService {
     private final TokenServicePort jwtService;
     private final RateLimiterPort rateLimiter;
     private final AuditService auditService;
+    private final MessageSource messageSource;
 
     @Transactional
     public AuthResponse register(RegisterRequest request, String ipAddress) {
@@ -74,11 +77,13 @@ public class AuthService {
     public AuthResponse login(LoginRequest request, String ipAddress, String userAgent) {
         String rateLimitKey = "login:" + ipAddress;
         if (rateLimiter.isRateLimited(rateLimitKey)) {
-            throw new AuthenticationFailedException("Too many login attempts. Please try again later.");
+            String msg = messageSource.getMessage("auth.tooManyAttempts", null, LocaleContextHolder.getLocale());
+            throw new AuthenticationFailedException(msg);
         }
 
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(AuthenticationFailedException::invalidCredentials);
+                .orElseThrow(() -> new AuthenticationFailedException(
+                        messageSource.getMessage("auth.invalidCredentials", null, LocaleContextHolder.getLocale())));
 
         if (user.getStatus() == UserStatus.LOCKED) {
             if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(Instant.now())) {
@@ -91,7 +96,8 @@ public class AuthService {
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
             handleFailedLogin(user, ipAddress);
-            throw AuthenticationFailedException.invalidCredentials();
+            String msg = messageSource.getMessage("auth.invalidCredentials", null, LocaleContextHolder.getLocale());
+            throw new AuthenticationFailedException(msg);
         }
 
         user.setFailedLoginAttempts(0);

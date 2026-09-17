@@ -173,6 +173,8 @@ class FinanceNotificationTest {
     }
 
     private UUID readyCase() {
+        // E1.3: a generated certificate is a precondition for any finance case.
+        certificateService.generateCertificate(internshipId, supervisorPrincipal);
         UUID caseId = financeService.openFinanceCase(internshipId, financePrincipal).id();
         attach("cin.png", "image/png", PNG_BYTES, DocumentType.CIN_COPY, caseId);
         attach("app.pdf", "application/pdf", PDF_BYTES, DocumentType.INTERNSHIP_APPLICATION, caseId);
@@ -216,6 +218,7 @@ class FinanceNotificationTest {
     @Test
     @DisplayName("Failed approval publishes no notification (rolled-back facts stay silent)")
     void failedApprovalPublishesNothing() throws Exception {
+        certificateService.generateCertificate(internshipId, supervisorPrincipal);
         UUID caseId = financeService.openFinanceCase(internshipId, financePrincipal).id();
         assertThatThrownBy(() -> financeService.approve(caseId, new PaymentDecisionRequest("ok"), financePrincipal))
                 .isInstanceOf(BusinessRuleException.class);

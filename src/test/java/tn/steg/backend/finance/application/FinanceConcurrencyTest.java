@@ -196,6 +196,8 @@ class FinanceConcurrencyTest {
     }
 
     private UUID readyCase() {
+        // E1.3: a generated certificate is a precondition for any finance case.
+        certificateService.generateCertificate(internshipId, supervisorPrincipal);
         UUID caseId = financeService.openFinanceCase(internshipId, financePrincipal).id();
         upload("cin.png", "image/png", PNG_BYTES, DocumentType.CIN_COPY, caseId);
         upload("app.pdf", "application/pdf", PDF_BYTES, DocumentType.INTERNSHIP_APPLICATION, caseId);

@@ -3,8 +3,8 @@ package tn.steg.backend.notification.infrastructure.mail;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Component;
 import tn.steg.backend.notification.application.port.out.EmailSender;
 
@@ -22,18 +22,44 @@ import tn.steg.backend.notification.application.port.out.EmailSender;
 public class SmtpEmailSender implements EmailSender {
 
     private final JavaMailSender mailSender;
+    private final MailTemplateService templates;
 
     @Value("${steg.notifications.mail.from:no-reply@steg.tn}")
     private String from;
 
     @Override
     public void send(String to, String subject, String body) {
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom(from);
-        message.setTo(to);
-        message.setSubject(subject);
-        message.setText(body);
-        mailSender.send(message);
-        log.debug("Notification email sent to {}", to);
+        try {
+            var message = mailSender.createMimeMessage();
+            // multipart/alternative: plain-text + branded HTML (E5 Brevo templates).
+            var helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom(from);
+            helper.setTo(to);
+            helper.setSubject(subject);
+            helper.setText(body, templates.generic(subject, body).html());
+            mailSender.send(message);
+            log.debug("Notification email sent to {}", to);
+        } catch (Exception ex) {
+            log.error("Failed to send notification email to {}: {}", to, ex.getClass().getSimpleName());
+            // Preserve the MailException contract callers (and tests) rely on.
+            throw new org.springframework.mail.MailSendException("Email delivery failed", ex);
+        }
+    }
+
+    /** Event-specific branded HTML mail (used by listeners for key workflow events). */
+    public void sendTemplated(String to, MailTemplateService.Mail mail) {
+        try {
+            var message = mailSender.createMimeMessage();
+            var helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom(from);
+            helper.setTo(to);
+            helper.setSubject(mail.subject());
+            helper.setText(mail.html(), true);
+            mailSender.send(message);
+            log.debug("Templated notification email sent to {}", to);
+        } catch (Exception ex) {
+            log.error("Failed to send templated email to {}: {}", to, ex.getClass().getSimpleName());
+            throw new org.springframework.mail.MailSendException("Email delivery failed", ex);
+        }
     }
 }

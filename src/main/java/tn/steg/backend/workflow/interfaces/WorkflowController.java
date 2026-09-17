@@ -56,8 +56,9 @@ public class WorkflowController {
             @ApiResponse(responseCode = "404", description = "Application or workflow not found")
     })
     public ResponseEntity<WorkflowInstanceResponse> getApplicationWorkflowState(
-            @PathVariable UUID id) {
-        return ResponseEntity.ok(workflowService.getApplicationWorkflowState(id));
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(workflowService.getApplicationWorkflowState(id, actor));
     }
 
     /**
@@ -102,8 +103,9 @@ public class WorkflowController {
             @ApiResponse(responseCode = "404", description = "Internship or workflow not found")
     })
     public ResponseEntity<WorkflowInstanceResponse> getInternshipWorkflowState(
-            @PathVariable UUID id) {
-        return ResponseEntity.ok(workflowService.getInternshipWorkflowState(id));
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(workflowService.getInternshipWorkflowState(id, actor));
     }
 
     /**

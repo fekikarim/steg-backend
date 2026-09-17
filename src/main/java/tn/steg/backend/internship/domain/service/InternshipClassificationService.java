@@ -11,20 +11,27 @@ import java.util.logging.Logger;
 
 /**
  * Pure, deterministic domain service responsible for computing the internship type
- * and requirement classification strictly from the internship's date boundaries.
+ * and requirement classification.
+ *
+ * <p>Inputs (E1.1): requested period (primary), declared academic level (final-year
+ * PFE signal only), supporting-documents flag {@code observationObligatoire} for short stays.
  *
  * Business rules (STEG specification):
  * - Duration ≈ 1 month (< 42 days / 6 weeks):
- *     → InternshipType.OBSERVATION
+ *     → InternshipType.OBSERVATION (regardless of academic level: a short stay is a visit).
  *     → Requirement: explicit staff flag (OBLIGATOIRE or OPTIONAL).
  *       If unspecified (null), logs a warning and conservatively defaults to OPTIONAL
  *       (so no unintended payment eligibility occurs).
- * - Duration between 6 weeks (inclusive, >= 42 days) and 3 months (inclusive, <= 3 calendar months / <= 92 days):
- *     → InternshipType.PERFECTIONNEMENT
- *     → Requirement forced to OBLIGATOIRE.
+ * - Duration between 6 weeks (inclusive, >= 42 days) and 3 months (inclusive):
+ *     → InternshipType.PERFECTIONNEMENT, Requirement forced to OBLIGATOIRE,
+ *       UNLESS the declared academic level carries an explicit final-year PFE signal
+ *       (e.g. "PFE", "projet de fin d'études", "Master 2", "5ème année") → PFE.
  * - Duration > 3 months:
- *     → InternshipType.PFE
- *     → Requirement forced to OBLIGATOIRE.
+ *     → InternshipType.PFE, Requirement forced to OBLIGATOIRE.
+ *
+ * <p>TODO — STEG VALIDATION REQUIRED: official duration thresholds per type and the
+ * authoritative final-year level vocabulary. The PFE-by-level override above is a
+ * documented default, not an official STEG rule.
  *
  * This service is pure, framework-free, and unit testable independent of Spring.
  */
@@ -33,6 +40,17 @@ public class InternshipClassificationService {
     private static final Logger LOGGER = Logger.getLogger(InternshipClassificationService.class.getName());
 
     public InternshipClassificationResult classify(LocalDate startDate, LocalDate endDate, Boolean observationObligatoire) {
+        return classify(startDate, endDate, observationObligatoire, null);
+    }
+
+    /**
+     * Full derivation (E1.1): period + academic-level hint + supporting-documents flag.
+     *
+     * @param academicLevelHint free-text declared level/year (e.g. "Master 2", "5ème année",
+     *                          "Licence 3"); null/blank disables the final-year override.
+     */
+    public InternshipClassificationResult classify(LocalDate startDate, LocalDate endDate,
+                                                   Boolean observationObligatoire, String academicLevelHint) {
         Objects.requireNonNull(startDate, "startDate must not be null");
         Objects.requireNonNull(endDate, "endDate must not be null");
 
@@ -69,6 +87,17 @@ public class InternshipClassificationService {
                     "Duration < 6 weeks (" + durationInDays + " days) classified as OBSERVATION; requirement=" + req
             );
         } else if (!isGreaterThan3Months) {
+            if (isFinalYearPfeSignal(academicLevelHint)) {
+                return new InternshipClassificationResult(
+                        InternshipType.PFE,
+                        InternshipRequirement.OBLIGATOIRE,
+                        true,
+                        durationInDays,
+                        "Duration between 6 weeks and 3 months (" + durationInDays
+                                + " days) with final-year level '" + academicLevelHint
+                                + "' classified as PFE (OBLIGATOIRE)"
+                );
+            }
             return new InternshipClassificationResult(
                     InternshipType.PERFECTIONNEMENT,
                     InternshipRequirement.OBLIGATOIRE,
@@ -85,5 +114,24 @@ public class InternshipClassificationService {
                     "Duration > 3 months (" + durationInDays + " days) classified as PFE (OBLIGATOIRE)"
             );
         }
+    }
+
+    /**
+     * Conservative final-year detector over free-text level/year. Matches explicit PFE
+     * vocabulary only; never guesses from bare years ("3", "L3") to avoid misclassification.
+     */
+    static boolean isFinalYearPfeSignal(String academicLevelHint) {
+        if (academicLevelHint == null || academicLevelHint.isBlank()) {
+            return false;
+        }
+        String n = academicLevelHint.toLowerCase(java.util.Locale.ROOT)
+                .replace('é', 'e').replace('è', 'e').replace('ê', 'e');
+        return n.contains("pfe")
+                || n.contains("projet de fin")
+                || n.contains("final year")
+                || n.contains("derniere annee")
+                || n.contains("5eme") || n.contains("5ème") || n.contains("5th")
+                || n.contains("master 2") || n.contains("m2 ")
+                || n.contains("ingenieur 3") || n.contains("ingénieur 3");
     }
 }

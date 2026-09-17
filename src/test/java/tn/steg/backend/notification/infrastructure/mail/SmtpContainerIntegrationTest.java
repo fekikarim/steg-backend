@@ -57,9 +57,15 @@ class SmtpContainerIntegrationTest {
         mailSender.setHost(MAILHOG.getHost());
         mailSender.setPort(MAILHOG.getMappedPort(1025));
 
-        SmtpEmailSender sender = new SmtpEmailSender(mailSender);
+        SmtpEmailSender sender = new SmtpEmailSender(mailSender, testTemplates());
         ReflectionTestUtils.setField(sender, "from", "no-reply@steg.tn");
         return sender;
+    }
+
+    private MailTemplateService testTemplates() {
+        MailTemplateService templates = new MailTemplateService();
+        ReflectionTestUtils.setField(templates, "brand", "STEG Test");
+        return templates;
     }
 
     /** Clears MailHog's inbox between tests so message lookups aren't polluted by earlier sends. */
@@ -97,7 +103,11 @@ class SmtpContainerIntegrationTest {
         assertThat(headers.get("From").get(0).asText()).isEqualTo("no-reply@steg.tn");
         assertThat(headers.get("To").get(0).asText()).isEqualTo(to);
         assertThat(headers.get("Subject").get(0).asText()).isEqualTo(subject);
-        assertThat(item.get("Content").get("Body").asText()).isEqualTo(body);
+        // E1/E5: multipart/alternative — plain text plus branded HTML carry the same message.
+        String mimeBody = item.get("Content").get("Body").asText();
+        assertThat(mimeBody).contains(body);
+        assertThat(mimeBody).contains("<!DOCTYPE html>");
+        assertThat(mimeBody).contains("STEG Test");
     }
 
     private JsonNode awaitAtLeastOneMessage() throws Exception {
@@ -156,7 +166,7 @@ class SmtpContainerIntegrationTest {
         mailSender.getJavaMailProperties().setProperty("mail.smtp.connectiontimeout", "1000");
         mailSender.getJavaMailProperties().setProperty("mail.smtp.timeout", "1000");
 
-        SmtpEmailSender sender = new SmtpEmailSender(mailSender);
+        SmtpEmailSender sender = new SmtpEmailSender(mailSender, testTemplates());
         ReflectionTestUtils.setField(sender, "from", "no-reply@steg.tn");
 
         assertThatThrownBy(() -> sender.send("someone@example.com", "subject", "body"))

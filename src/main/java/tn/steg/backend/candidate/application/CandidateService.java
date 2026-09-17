@@ -13,17 +13,16 @@ import tn.steg.backend.candidate.domain.model.Candidate;
 import tn.steg.backend.candidate.domain.model.University;
 import tn.steg.backend.candidate.domain.repository.CandidateRepository;
 import tn.steg.backend.candidate.domain.repository.UniversityRepository;
+import tn.steg.backend.candidate.domain.service.NationalIdHasher;
+import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.iam.domain.model.User;
 import tn.steg.backend.iam.domain.repository.UserRepository;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
-import java.util.HexFormat;
+
 import java.util.List;
 import java.util.UUID;
 
@@ -49,6 +48,7 @@ public class CandidateService {
     private final CandidateRepository candidateRepository;
     private final UniversityRepository universityRepository;
     private final UserRepository userRepository;
+    private final AuditService auditService;
 
     // -------------------------------------------------------------------------
     // Candidate CRUD
@@ -65,7 +65,7 @@ public class CandidateService {
                             "A candidate profile already exists for your account.");
                 });
 
-        String nationalIdHash = sha256Hex(request.nationalId());
+        String nationalIdHash = NationalIdHasher.sha256Hex(request.nationalId());
         if (candidateRepository.existsByNationalIdHash(nationalIdHash)) {
             throw new BusinessRuleException("CANDIDATE_NATIONAL_ID_DUPLICATE",
                     "A candidate with this national ID is already registered.");
@@ -94,6 +94,10 @@ public class CandidateService {
 
         candidate = candidateRepository.save(candidate);
         log.info("Candidate profile created for user: {}", actor.getId());
+        // E1.5: CIN-bearing responses are audited on every access (no CIN value logged).
+        auditService.log("CANDIDATE_CIN_ACCESSED", "Candidate", candidate.getId(), null,
+                java.util.Map.of("disclosedTo", "self-on-create"), actor.getId(), null,
+                AuditService.primaryRole(actor.getRoles()), null);
         return CandidateDetailResponse.from(candidate, request.nationalId());
     }
 
@@ -109,6 +113,10 @@ public class CandidateService {
     public CandidateDetailResponse getMyProfile(UserPrincipal actor) {
         Candidate candidate = candidateRepository.findByUserId(actor.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Candidate profile not found for user: " + actor.getId()));
+        // E1.5: self CIN read is entitled and audited (no value logged).
+        auditService.log("CANDIDATE_CIN_ACCESSED", "Candidate", candidate.getId(), null,
+                java.util.Map.of("disclosedTo", "self"), actor.getId(), null,
+                AuditService.primaryRole(actor.getRoles()), null);
         return CandidateDetailResponse.from(candidate, candidate.getNationalIdEncrypted());
     }
 
@@ -133,6 +141,12 @@ public class CandidateService {
 
         // Provide nationalId to self and staff only
         String nationalId = (isSelf || isStaff) ? candidate.getNationalIdEncrypted() : null;
+        if (nationalId != null) {
+            // E1.5: every entitled CIN read is audited (no value logged).
+            auditService.log("CANDIDATE_CIN_ACCESSED", "Candidate", candidate.getId(), null,
+                    java.util.Map.of("disclosedTo", isSelf ? "self" : "staff"), actor.getId(), null,
+                    AuditService.primaryRole(actor.getRoles()), null);
+        }
         return CandidateDetailResponse.from(candidate, nationalId);
     }
 
@@ -149,7 +163,7 @@ public class CandidateService {
         }
 
         // If nationalId changed, recheck uniqueness
-        String newHash = sha256Hex(request.nationalId());
+        String newHash = NationalIdHasher.sha256Hex(request.nationalId());
         if (!newHash.equals(candidate.getNationalIdHash())) {
             if (candidateRepository.existsByNationalIdHash(newHash)) {
                 throw new BusinessRuleException("CANDIDATE_NATIONAL_ID_DUPLICATE",
@@ -174,6 +188,10 @@ public class CandidateService {
 
         candidate = candidateRepository.save(candidate);
         log.info("Candidate profile updated: id={}", id);
+        // E1.5: update response carries the CIN back — audit the disclosure.
+        auditService.log("CANDIDATE_CIN_ACCESSED", "Candidate", candidate.getId(), null,
+                java.util.Map.of("disclosedTo", isSelf ? "self-on-update" : "staff-on-update"), actor.getId(), null,
+                AuditService.primaryRole(actor.getRoles()), null);
         return CandidateDetailResponse.from(candidate, candidate.getNationalIdEncrypted());
     }
 
@@ -204,16 +222,9 @@ public class CandidateService {
     }
 
     /**
-     * Deterministic SHA-256 hex digest used as the uniqueness token for nationalId.
-     * In Phase A6 this will be replaced by HMAC-SHA256 with a server-side key.
+     * Helper to format national ID as a deterministic hash for uniqueness checks.
      */
-    private static String sha256Hex(String input) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
-        }
+    private static String formatNationalIdHash(String input) {
+        return NationalIdHasher.sha256Hex(input);
     }
 }

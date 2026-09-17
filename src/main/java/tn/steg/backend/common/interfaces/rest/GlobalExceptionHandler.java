@@ -13,6 +13,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.RateLimitExceededException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
@@ -78,7 +79,6 @@ public class GlobalExceptionHandler {
         );
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(envelope);
     }
-
     @ExceptionHandler(BusinessRuleException.class)
     public ResponseEntity<ErrorEnvelope> handleBusinessRuleException(BusinessRuleException ex, HttpServletRequest request) {
         ErrorEnvelope envelope = buildEnvelope(
@@ -92,6 +92,42 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(envelope);
     }
 
+    /**
+     * Files exceeding the servlet multipart ceiling (see
+     * `spring.servlet.multipart` in application.yml) never reach
+     * DocumentValidationService. Map them to a useful 413 with the same
+     * FILE_TOO_LARGE code the domain validation uses, instead of a generic
+     * 500, so clients can explain the size limit (B5).
+     */
+    /**
+     * E2: missing/invalid request parameters (e.g. multipart `title`) are client errors,
+     * never 500s. Typed 400 with the parameter name so clients can explain the fix.
+     */
+    @ExceptionHandler({org.springframework.web.bind.MissingServletRequestParameterException.class,
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class})
+    public ResponseEntity<ErrorEnvelope> handleBadRequestParams(Exception ex, HttpServletRequest request) {
+        ErrorEnvelope envelope = buildEnvelope(
+                HttpStatus.BAD_REQUEST,
+                "INVALID_REQUEST_PARAMETER",
+                "A required request parameter is missing or invalid: " + ex.getMessage(),
+                request,
+                null
+        );
+        log.warn("Bad request parameter on path {}: {}", request.getRequestURI(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(envelope);
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ErrorEnvelope> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException ex, HttpServletRequest request) {        ErrorEnvelope envelope = buildEnvelope(
+                HttpStatus.PAYLOAD_TOO_LARGE,
+                "FILE_TOO_LARGE",
+                "Uploaded file exceeds the maximum allowed size.",
+                request,
+                null
+        );
+        log.warn("Upload rejected on path {}: exceeds multipart ceiling", request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(envelope);
+    }
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ErrorEnvelope> handleResourceNotFoundException(ResourceNotFoundException ex, HttpServletRequest request) {
         ErrorEnvelope envelope = buildEnvelope(
@@ -130,8 +166,19 @@ public class GlobalExceptionHandler {
                 request,
                 null
         );
-        log.warn("Access denied on path {}: {}", request.getRequestURI(), ex.getMessage());
+        // Role-gated reports (e.g. SUPERVISOR -> HR reports) legitimately return 403
+        // as part of normal dashboard "unavailable" flow — not a security incident.
+        if (isExpectedRoleGate(request)) {
+            log.debug("Access denied (role gate) on path {}: {}", request.getRequestURI(), ex.getMessage());
+        } else {
+            log.warn("Access denied on path {}: {}", request.getRequestURI(), ex.getMessage());
+        }
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(envelope);
+    }
+
+    private boolean isExpectedRoleGate(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        return path != null && path.startsWith("/api/reports/");
     }
 
     @ExceptionHandler(AuthenticationException.class)

@@ -103,7 +103,6 @@ class ApplicationControllerIntegrationTest {
         ApplicationCreateRequest request = new ApplicationCreateRequest(
                 LocalDate.of(2026, 7, 1),
                 LocalDate.of(2026, 8, 31),
-                "Summer Engineering Internship in Smart Grids",
                 true
         );
 
@@ -113,8 +112,7 @@ class ApplicationControllerIntegrationTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.reference").value(org.hamcrest.Matchers.matchesPattern("^APP-\\d{4}-\\d{5}$")))
-                .andExpect(jsonPath("$.status").value("DRAFT"))
-                .andExpect(jsonPath("$.proposedTheme").value("Summer Engineering Internship in Smart Grids"));
+                .andExpect(jsonPath("$.status").value("DRAFT"));
     }
 
     @Test
@@ -140,7 +138,6 @@ class ApplicationControllerIntegrationTest {
         ApplicationCreateRequest requestA = new ApplicationCreateRequest(
                 LocalDate.of(2026, 9, 1),
                 LocalDate.of(2026, 12, 31),
-                "Candidate A project",
                 true
         );
 
@@ -163,7 +160,6 @@ class ApplicationControllerIntegrationTest {
         ApplicationUpdateRequest updateRequest = new ApplicationUpdateRequest(
                 LocalDate.of(2026, 10, 1),
                 LocalDate.of(2026, 11, 30),
-                "Hacked Theme",
                 true
         );
 

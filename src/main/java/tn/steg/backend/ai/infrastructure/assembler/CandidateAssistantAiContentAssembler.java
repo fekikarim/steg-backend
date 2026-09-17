@@ -4,6 +4,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import tn.steg.backend.ai.domain.assembler.AssembledAiContent;
 import tn.steg.backend.ai.domain.assembler.CandidateAssistantContentAssembler;
+import tn.steg.backend.ai.domain.knowledge.StegKnowledgeBase;
+import tn.steg.backend.ai.domain.knowledge.StegKnowledgeBase.Entry;
 import tn.steg.backend.application.domain.model.InternshipApplication;
 import tn.steg.backend.application.domain.repository.InternshipApplicationRepository;
 import tn.steg.backend.candidate.domain.model.Candidate;
@@ -27,6 +29,7 @@ public class CandidateAssistantAiContentAssembler implements CandidateAssistantC
 
     private final CandidateRepository candidateRepository;
     private final InternshipApplicationRepository applicationRepository;
+    private final StegKnowledgeBase knowledgeBase;
 
     @Override
     public AssembledAiContent assemble(UUID candidateId, String userQuestion) {
@@ -37,19 +40,24 @@ public class CandidateAssistantAiContentAssembler implements CandidateAssistantC
 
         String systemInstruction = """
                 You are the STEG Candidate Assistant (Assistant Virtuel des Stages STEG).
-                You provide polite, helpful guidance to candidates regarding their internship application status,
-                general document requirements (CV, lettre d'affectation, convention de stage), and standard STEG internship rules.
-                
+                You provide polite, helpful guidance using ONLY the official STEG sheets below,
+                plus the candidate's own application status shown. Gemini general knowledge
+                must never override these sheets.
+                If the question matches no sheet, decline politely instead of inventing STEG policy.
+
                 Strict Security & Privacy Guidelines:
                 1. Never disclose or ask for CIN, national ID card numbers, or passwords.
                 2. Never reveal internal reviewer comments, staff deliberation notes, or finance case calculations.
                 3. Only discuss applications belonging to this specific candidate.
                 4. Always advise the candidate that formal administrative decisions are taken by authorized STEG staff.
+                5. Mark answers as advisory information, not official decisions.
                 Respond in French or Arabic as appropriate to the user query.
                 """;
 
         List<String> promptParts = new ArrayList<>();
         promptParts.add("Candidat: " + candidate.getFirstName() + " " + candidate.getLastName());
+        List<Entry> sheets = knowledgeBase.retrieve(userQuestion);
+        promptParts.add(StegKnowledgeBase.renderContext(sheets));
         if (candidate.getUniversity() != null) {
             promptParts.add("Établissement: " + candidate.getUniversity().getName());
         }
@@ -64,8 +72,8 @@ public class CandidateAssistantAiContentAssembler implements CandidateAssistantC
         promptParts.add(appSb.toString());
         promptParts.add("Question posée par le candidat:\n" + userQuestion);
 
-        String inputSummary = String.format("Candidate id=%s, applicationsCount=%d, questionLength=%d",
-                candidateId, apps.size(), userQuestion != null ? userQuestion.length() : 0);
+        String inputSummary = String.format("Candidate id=%s, applicationsCount=%d, kbEntries=%d, questionLength=%d",
+                candidateId, apps.size(), sheets.size(), userQuestion != null ? userQuestion.length() : 0);
 
         // cinExcluded is unconditionally true
         return new AssembledAiContent(systemInstruction, promptParts, inputSummary, true);

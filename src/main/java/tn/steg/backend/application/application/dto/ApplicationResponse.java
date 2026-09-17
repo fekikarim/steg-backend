@@ -34,9 +34,6 @@ public record ApplicationResponse(
         @Schema(description = "Desired end date")
         LocalDate desiredEndDate,
 
-        @Schema(description = "Proposed internship theme")
-        String proposedTheme,
-
         @Schema(description = "Whether submitted online")
         Boolean submittedOnline,
 
@@ -80,7 +77,6 @@ public record ApplicationResponse(
                 candidateName,
                 a.getDesiredStartDate(),
                 a.getDesiredEndDate(),
-                a.getProposedTheme(),
                 a.getSubmittedOnline(),
                 a.getSubmissionDate(),
                 a.getCalculatedType(),

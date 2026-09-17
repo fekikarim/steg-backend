@@ -128,9 +128,11 @@ class ReportControllerTest {
         adminEmployee.setUser(adminUser);
         employeeRepository.saveAndFlush(adminEmployee);
 
-        // 2 applications: DRAFT + ACCEPTED
+        // 2 applications: DRAFT + ACCEPTED (E1: one per candidate — two candidates)
+        Candidate candidate2 = new Candidate("Report", "Second", "report_second@steg.tn", "RP-000001", uni);
+        candidate2 = candidateRepository.saveAndFlush(candidate2);
         InternshipApplication draftApp = new InternshipApplication("APP-RP-DRAFT", candidate, ApplicationStatus.DRAFT);
-        InternshipApplication acceptedApp = new InternshipApplication("APP-RP-ACC", candidate, ApplicationStatus.ACCEPTED);
+        InternshipApplication acceptedApp = new InternshipApplication("APP-RP-ACC", candidate2, ApplicationStatus.ACCEPTED);
         applicationRepository.saveAndFlush(draftApp);
         applicationRepository.saveAndFlush(acceptedApp);
 

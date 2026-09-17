@@ -7,6 +7,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import tn.steg.backend.common.domain.event.ApplicationAcceptedEvent;
 import tn.steg.backend.common.domain.event.ApplicationRejectedEvent;
+import tn.steg.backend.common.domain.event.ApplicationSubmittedEvent;
 import tn.steg.backend.common.domain.event.DocumentVerifiedEvent;
 import tn.steg.backend.common.domain.event.InternshipAssignedEvent;
 import tn.steg.backend.common.domain.event.JournalEntryValidatedEvent;
@@ -35,6 +36,18 @@ import java.util.List;
 public class NotificationEventListener {
 
     private final NotificationService notificationService;
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onApplicationSubmitted(ApplicationSubmittedEvent event) {
+        // E2 step 10: submission confirmation (HIGH → email when enabled + opt-in).
+        notificationService.dispatch(
+                "Application received",
+                "Your internship application " + event.applicationReference() + " has been received. "
+                        + "You can track its progress from your candidate space.",
+                NotificationPriority.HIGH,
+                "InternshipApplication", event.applicationId(),
+                List.of(event.candidateUserId()), event.actorId());
+    }
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onApplicationAccepted(ApplicationAcceptedEvent event) {

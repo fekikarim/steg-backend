@@ -174,6 +174,9 @@ class FinanceCertificateIntegrationTest {
     private tn.steg.backend.certificate.infrastructure.persistence.CertificateRepository certificateRepository;
 
     @Autowired
+    private tn.steg.backend.certificate.application.CertificateService certificateService;
+
+    @Autowired
     private tn.steg.backend.finance.infrastructure.persistence.PaymentReceiptRepository receiptRepository;
 
     @Autowired
@@ -297,6 +300,19 @@ class FinanceCertificateIntegrationTest {
         return UUID.fromString(objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText());
     }
 
+    /**
+     * E1.3: finance flows require a pre-generated certificate. Seeds it unless present,
+     * then opens the case. Cert-generation tests post raw endpoints without this helper.
+     */
+    private UUID openCertifiedCase(UUID internshipId, String token) throws Exception {
+        if (certificateRepository.findByInternshipId(internshipId).isEmpty()) {
+            UserPrincipal supervisorPrincipal = new UserPrincipal(
+                    supervisorUser.getId(), supervisorUser.getEmail(), List.of("ROLE_SUPERVISOR"));
+            certificateService.generateCertificate(internshipId, supervisorPrincipal);
+        }
+        return openCase(internshipId, token);
+    }
+
     private UUID openCase(UUID internshipId, String token) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/finance-cases")
                         .header("Authorization", "Bearer " + token)
@@ -372,6 +388,9 @@ class FinanceCertificateIntegrationTest {
     @Test
     @DisplayName("Opening a case for an OBLIGATOIRE COMPLETED internship computes the exact snapshot")
     void openHappyPathComputesSnapshot() throws Exception {
+        UserPrincipal supervisorPrincipal = new UserPrincipal(
+                supervisorUser.getId(), supervisorUser.getEmail(), List.of("ROLE_SUPERVISOR"));
+        certificateService.generateCertificate(obligatoryCompleted.getId(), supervisorPrincipal);
         MvcResult result = mockMvc.perform(post("/api/finance-cases")
                         .header("Authorization", "Bearer " + financeToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -422,8 +441,7 @@ class FinanceCertificateIntegrationTest {
 
     @Test
     @DisplayName("Cases cannot be opened before COMPLETED, duplicated, or for unknown internships")
-    void openGuards() throws Exception {
-        // Still ACTIVE
+    void openGuards() throws Exception {        // Still ACTIVE
         mockMvc.perform(post("/api/finance-cases")
                         .header("Authorization", "Bearer " + financeToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -439,7 +457,7 @@ class FinanceCertificateIntegrationTest {
                 .andExpect(status().isNotFound());
 
         // Duplicate
-        openCase(obligatoryCompleted.getId(), financeToken);
+        openCertifiedCase(obligatoryCompleted.getId(), financeToken);
         mockMvc.perform(post("/api/finance-cases")
                         .header("Authorization", "Bearer " + financeToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -455,6 +473,19 @@ class FinanceCertificateIntegrationTest {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    @DisplayName("E1.3: cases cannot be opened without a generated certificate")
+    void openWithoutCertificateRejected() throws Exception {
+        assertThat(certificateRepository.findByInternshipId(obligatoryCompleted.getId())).isEmpty();
+
+        mockMvc.perform(post("/api/finance-cases")
+                        .header("Authorization", "Bearer " + financeToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"internshipId\":\"" + obligatoryCompleted.getId() + "\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error").value("INTERNSHIP_CERTIFICATE_REQUIRED"));
+    }
+
     // -------------------------------------------------------------------------
     // Dossier → READY_FOR_DECISION
     // -------------------------------------------------------------------------
@@ -462,7 +493,7 @@ class FinanceCertificateIntegrationTest {
     @Test
     @DisplayName("Complete verified dossier advances the case to READY_FOR_DECISION")
     void dossierCompletionAdvancesCase() throws Exception {
-        UUID caseId = openCase(obligatoryCompleted.getId(), financeToken);
+        UUID caseId = openCertifiedCase(obligatoryCompleted.getId(), financeToken);
         assertThat(caseStatus(caseId, financeToken)).isEqualTo("OPENED");
 
         UUID cin = uploadDocument(supervisorToken, PNG_BYTES, "cin.png", "image/png", "CIN_COPY");
@@ -517,7 +548,7 @@ class FinanceCertificateIntegrationTest {
     @Test
     @DisplayName("Approval issues a distinct receipt PDF and notifies; non-FINANCE cannot decide")
     void approveHappyPath() throws Exception {
-        UUID caseId = attachDossier(openCase(obligatoryCompleted.getId(), financeToken));
+        UUID caseId = attachDossier(openCertifiedCase(obligatoryCompleted.getId(), financeToken));
 
         // HR and ADMIN hold no FINANCE decision power
         mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
@@ -580,7 +611,7 @@ class FinanceCertificateIntegrationTest {
     @Test
     @DisplayName("Approval requires READY_FOR_DECISION; rejection requires a reason and issues no receipt")
     void approvalReadinessAndRejection() throws Exception {
-        UUID caseId = openCase(obligatoryCompleted.getId(), financeToken);
+        UUID caseId = openCertifiedCase(obligatoryCompleted.getId(), financeToken);
 
         // Not ready yet → approve rejected
         mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
@@ -616,7 +647,7 @@ class FinanceCertificateIntegrationTest {
     @Test
     @DisplayName("Recalculation pre-decision appends a new snapshot, preserving history")
     void recalculatePreDecision() throws Exception {
-        UUID caseId = openCase(obligatoryCompleted.getId(), financeToken);
+        UUID caseId = openCertifiedCase(obligatoryCompleted.getId(), financeToken);
         mockMvc.perform(post("/api/finance-cases/" + caseId + "/recalculate")
                         .header("Authorization", "Bearer " + financeToken))
                 .andExpect(status().isOk())
@@ -699,7 +730,7 @@ class FinanceCertificateIntegrationTest {
         String certRef = objectMapper.readTree(certResult.getResponse().getContentAsString())
                 .get("reference").asText();
 
-        UUID caseId = attachDossier(openCase(obligatoryCompleted.getId(), financeToken));
+        UUID caseId = attachDossier(openCertifiedCase(obligatoryCompleted.getId(), financeToken));
         MvcResult approved = mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
                         .header("Authorization", "Bearer " + financeToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -751,7 +782,7 @@ class FinanceCertificateIntegrationTest {
         assertThat(certText).contains("OFFICIELLE STEG REQUISE");
         assertThat(certText).doesNotContain("150.00");
 
-        UUID caseId = attachDossier(openCase(obligatoryCompleted.getId(), financeToken));
+        UUID caseId = attachDossier(openCertifiedCase(obligatoryCompleted.getId(), financeToken));
         mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
                         .header("Authorization", "Bearer " + financeToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -775,7 +806,12 @@ class FinanceCertificateIntegrationTest {
     @Test
     @DisplayName("Storage outage fails generation atomically: no orphan rows, no false completion, retry is safe")
     void storageOutageIsAtomic() throws Exception {
-        UUID caseId = attachDossier(openCase(obligatoryCompleted.getId(), financeToken));
+        UUID caseId = attachDossier(openCertifiedCase(obligatoryCompleted.getId(), financeToken));
+        // E1.3: openCertifiedCase pre-seeds a certificate, so the certificate-outage
+        // half runs on a fresh cert-free completed internship (same fixture helper).
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        Internship outageInternship = createCompletedInternship(
+                LocalDate.of(2026, 1, 1), LocalDate.of(2026, 4, 1), false, hrPrincipal);
         long assetsBefore = fileAssetRepository.count();
         long docsBefore = documentRepository.count();
         long certAuditsBefore = countAudits("Certificate", "CERTIFICATE_GENERATED");
@@ -786,10 +822,10 @@ class FinanceCertificateIntegrationTest {
 
         outageStorage.outage.set(true);
         try {
-            mockMvc.perform(post("/api/internships/" + obligatoryCompleted.getId() + "/certificates")
+            mockMvc.perform(post("/api/internships/" + outageInternship.getId() + "/certificates")
                             .header("Authorization", "Bearer " + supervisorToken))
                     .andExpect(status().is5xxServerError());
-            assertThat(certificateRepository.findByInternshipId(obligatoryCompleted.getId())).isEmpty();
+            assertThat(certificateRepository.findByInternshipId(outageInternship.getId())).isEmpty();
 
             mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
                             .header("Authorization", "Bearer " + financeToken)
@@ -823,13 +859,13 @@ class FinanceCertificateIntegrationTest {
 
         // Retrying after the outage clears must succeed cleanly and produce
         // exactly one artifact each (no duplicate from the earlier failed attempt).
-        MvcResult retriedCert = mockMvc.perform(post("/api/internships/" + obligatoryCompleted.getId() + "/certificates")
+        MvcResult retriedCert = mockMvc.perform(post("/api/internships/" + outageInternship.getId() + "/certificates")
                         .header("Authorization", "Bearer " + supervisorToken))
                 .andExpect(status().isCreated())
                 .andReturn();
         assertThat(objectMapper.readTree(retriedCert.getResponse().getContentAsString()).get("reference").asText())
                 .startsWith("CERT-");
-        assertThat(certificateRepository.findByInternshipId(obligatoryCompleted.getId())).hasSize(1);
+        assertThat(certificateRepository.findByInternshipId(outageInternship.getId())).hasSize(1);
 
         MvcResult retriedApproval = mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
                         .header("Authorization", "Bearer " + financeToken)
@@ -896,7 +932,7 @@ class FinanceCertificateIntegrationTest {
         }
 
         // --- PaymentReceipt: real approval endpoint, amount/months/currency/reference ---
-        UUID caseId = attachDossier(openCase(obligatoryCompleted.getId(), financeToken));
+        UUID caseId = attachDossier(openCertifiedCase(obligatoryCompleted.getId(), financeToken));
         MvcResult approved = mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
                         .header("Authorization", "Bearer " + financeToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -948,7 +984,7 @@ class FinanceCertificateIntegrationTest {
     @DisplayName("A11 final gate: an APPROVED case is permanently immutable — dossier edits, "
             + "rejection, re-approval and unrelated internship mutations never alter the decided snapshot")
     void approvedCaseIsPermanentlyImmutableExtended() throws Exception {
-        UUID caseId = attachDossier(openCase(obligatoryCompleted.getId(), financeToken));
+        UUID caseId = attachDossier(openCertifiedCase(obligatoryCompleted.getId(), financeToken));
         MvcResult approved = mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
                         .header("Authorization", "Bearer " + financeToken)
                         .contentType(MediaType.APPLICATION_JSON)

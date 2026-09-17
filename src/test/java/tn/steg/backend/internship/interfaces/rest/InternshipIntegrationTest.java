@@ -148,7 +148,6 @@ class InternshipIntegrationTest {
         app.setStatus(ApplicationStatus.ACCEPTED);
         app.setDesiredStartDate(LocalDate.of(2026, 7, 1));
         app.setDesiredEndDate(LocalDate.of(2026, 8, 31)); // 2 months -> PERFECTIONNEMENT
-        app.setProposedTheme("Smart Grid Automation");
         app = applicationRepository.saveAndFlush(app);
 
         InternshipCreateFromApplicationRequest request = new InternshipCreateFromApplicationRequest(

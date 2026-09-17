@@ -90,6 +90,13 @@ class AiServiceGracefulDegradationTest {
     @Mock FinanceCaseContentAssembler financeCaseAssembler;
     @Mock LogbookContentAssembler logbookAssembler;
     @Mock CandidateAssistantContentAssembler candidateAssistantAssembler;
+    @Mock tn.steg.backend.ai.domain.knowledge.StegKnowledgeBase knowledgeBase;
+    @Mock tn.steg.backend.ai.domain.assembler.InternAssistantContentAssembler internAssistantAssembler;
+    @Mock tn.steg.backend.ai.domain.service.LogbookFidelityGate fidelityChecker;
+    @Mock tn.steg.backend.companion.domain.repository.InternshipJournalRepository journalRepository;
+    @Mock tn.steg.backend.companion.domain.repository.JournalEntryRepository journalEntryRepository;
+    @Mock tn.steg.backend.companion.domain.repository.TaskRepository taskRepository;
+    @Mock tn.steg.backend.companion.domain.repository.DeliverableRepository deliverableRepository;
     @Mock CandidateRepository candidateRepository;
     @Mock UserRepository userRepository;
     @Mock EmployeeRepository employeeRepository;
@@ -107,6 +114,13 @@ class AiServiceGracefulDegradationTest {
                 financeCaseAssembler,
                 logbookAssembler,
                 candidateAssistantAssembler,
+                internAssistantAssembler,
+                knowledgeBase,
+                fidelityChecker,
+                journalRepository,
+                journalEntryRepository,
+                taskRepository,
+                deliverableRepository,
                 candidateRepository,
                 userRepository,
                 employeeRepository,
@@ -229,6 +243,8 @@ class AiServiceGracefulDegradationTest {
     class QueryCandidateAssistantDegradation {
 
         private static final UUID CANDIDATE_ID = UUID.randomUUID();
+        private static final UserPrincipal CANDIDATE_ACTOR =
+                new UserPrincipal(ACTOR_ID, "actor@test.tn", List.of("ROLE_CANDIDATE"));
 
         @BeforeEach
         void stubCandidateAndAssembler() {
@@ -245,7 +261,7 @@ class AiServiceGracefulDegradationTest {
                     .thenReturn(AiCompletionResult.failure(ERROR_MESSAGE, FAKE_MODEL, PROVIDER));
 
             CandidateAssistantQueryRequest request = new CandidateAssistantQueryRequest("Quelle est la prochaine étape?");
-            AiAnalysisResultResponse response = service.queryCandidateAssistant(request, ACTOR);
+            AiAnalysisResultResponse response = service.queryCandidateAssistant(request, CANDIDATE_ACTOR);
 
             assertDegradedResponse(response, "Service d'assistance temporairement indisponible");
             assertCinExcludedPersisted(AiAnalysisType.CANDIDATE_ASSISTANT_QUERY);

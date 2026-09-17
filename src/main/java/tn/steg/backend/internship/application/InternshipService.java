@@ -15,6 +15,9 @@ import tn.steg.backend.candidate.domain.repository.CandidateRepository;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.iam.domain.model.Role;
+import tn.steg.backend.iam.domain.repository.RoleRepository;
+import tn.steg.backend.iam.domain.repository.UserRepository;
 import tn.steg.backend.internship.application.dto.*;
 import tn.steg.backend.internship.domain.model.*;
 import tn.steg.backend.internship.domain.repository.InternshipAssignmentRepository;
@@ -48,6 +51,8 @@ public class InternshipService {
     private final CandidateRepository candidateRepository;
     private final DepartmentRepository departmentRepository;
     private final EmployeeRepository employeeRepository;
+    private final UserRepository userRepository;
+    private final RoleRepository roleRepository;
     private final tn.steg.backend.companion.domain.repository.InternshipJournalRepository journalRepository;
 
     /** Lazy injection to avoid circular dependency with WorkflowService. */
@@ -72,6 +77,8 @@ public class InternshipService {
                                CandidateRepository candidateRepository,
                                DepartmentRepository departmentRepository,
                                EmployeeRepository employeeRepository,
+                               UserRepository userRepository,
+                               RoleRepository roleRepository,
                                tn.steg.backend.companion.domain.repository.InternshipJournalRepository journalRepository,
                                @Lazy WorkflowService workflowService,
                                @Lazy MessagingService messagingService,
@@ -83,6 +90,8 @@ public class InternshipService {
         this.candidateRepository   = candidateRepository;
         this.departmentRepository  = departmentRepository;
         this.employeeRepository    = employeeRepository;
+        this.userRepository        = userRepository;
+        this.roleRepository        = roleRepository;
         this.journalRepository     = journalRepository;
         this.workflowService       = workflowService;
         this.messagingService      = messagingService;
@@ -110,8 +119,10 @@ public class InternshipService {
         LocalDate start = application.getDesiredStartDate() != null ? application.getDesiredStartDate() : LocalDate.now();
         LocalDate end = application.getDesiredEndDate() != null ? application.getDesiredEndDate() : start.plusMonths(1);
 
+        // E1.1: academic level is not captured on the application yet (see matrix);
+        // duration + staff flag drive the derivation here.
         InternshipClassificationResult classification = classificationService.classify(
-                start, end, request.observationObligatoire()
+                start, end, request.observationObligatoire(), null
         );
 
         String reference = generateInternshipReference();
@@ -124,12 +135,12 @@ public class InternshipService {
                 classification.requirement()
         );
         internship.setApplication(application);
-        internship.setSubject(application.getProposedTheme());
         internship.setStatus(InternshipStatus.PLANNED);
         internship.setPlannedAt(Instant.now());
 
         internship = internshipRepository.save(internship);
         journalRepository.save(new tn.steg.backend.companion.domain.model.InternshipJournal(internship));
+        elevateToIntern(application.getCandidate());
         log.info("Internship created from application: ref={}, candidate={}", reference, application.getCandidate().getId());
         auditService.log("INTERNSHIP_CREATED_FROM_APPLICATION", "Internship", internship.getId(), null,
                 Map.of("reference", reference, "applicationId", application.getId(),
@@ -154,7 +165,8 @@ public class InternshipService {
         InternshipClassificationResult classification = classificationService.classify(
                 request.startDate(),
                 request.endDate(),
-                request.observationObligatoire()
+                request.observationObligatoire(),
+                request.academicLevel()
         );
 
         String reference = generateInternshipReference();
@@ -173,6 +185,7 @@ public class InternshipService {
 
         internship = internshipRepository.save(internship);
         journalRepository.save(new tn.steg.backend.companion.domain.model.InternshipJournal(internship));
+        elevateToIntern(candidate);
         log.info("Internship created manually: ref={}, candidate={}", reference, candidate.getId());
         auditService.log("INTERNSHIP_CREATED_MANUAL", "Internship", internship.getId(), null,
                 Map.of("reference", reference, "candidateId", candidate.getId(),
@@ -185,10 +198,37 @@ public class InternshipService {
         return InternshipResponse.from(internship);
     }
 
+    /**
+     * E2: the candidate becomes an intern when their internship is created. The INTERN
+     * role is added alongside CANDIDATE (never replaced) so role-scoped surfaces
+     * (mobile workspace, intern assistant) unlock on next login. Idempotent.
+     */
+    private void elevateToIntern(Candidate candidate) {
+        if (candidate == null || candidate.getUser() == null) {
+            return;
+        }
+        UUID userId = candidate.getUser().getId();
+        tn.steg.backend.iam.domain.model.User user = userRepository.findById(userId).orElse(null);
+        if (user == null) {
+            return;
+        }
+        boolean already = user.getAssignedRoles().stream()
+                .anyMatch(r -> "INTERN".equalsIgnoreCase(r.getCode()));
+        if (already) {
+            return;
+        }
+        roleRepository.findByCode("INTERN").ifPresent(intern -> {
+            user.getAssignedRoles().add(intern);
+            userRepository.save(user);
+            auditService.log("USER_ELEVATED_TO_INTERN", "User", userId, null,
+                    Map.of("candidateId", candidate.getId().toString()), null, null);
+            log.info("User elevated to INTERN: user={} candidate={}", userId, candidate.getId());
+        });
+    }
+
     // -------------------------------------------------------------------------
     // Dates Update & Reclassification
     // -------------------------------------------------------------------------
-
     @Transactional
     public InternshipResponse updateDates(UUID id, InternshipUpdateDatesRequest request, UserPrincipal actor) {
         Internship internship = findInternshipOrThrow(id);
@@ -201,7 +241,8 @@ public class InternshipService {
         InternshipClassificationResult classification = classificationService.classify(
                 request.startDate(),
                 request.endDate(),
-                request.observationObligatoire()
+                request.observationObligatoire(),
+                internship.getAcademicLevel()
         );
 
         Map<String, Object> oldValues = Map.of(
@@ -360,7 +401,8 @@ public class InternshipService {
         InternshipClassificationResult result = classificationService.classify(
                 internship.getStartDate(),
                 internship.getEndDate(),
-                obsObligatoire
+                obsObligatoire,
+                internship.getAcademicLevel()
         );
         return InternshipClassificationResponse.from(
                 internship.getId(),

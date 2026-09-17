@@ -96,10 +96,13 @@ public class CompanionService {
 
         task = taskRepository.save(task);
         log.info("Task created: id={}, internship={}, creator={}", task.getId(), internshipId, creator.getId());
+        // E2: Map.of forbids nulls — unassigned tasks carry a null assignedToId.
+        java.util.Map<String, Object> taskAudit = new java.util.LinkedHashMap<>();
+        taskAudit.put("internshipId", internshipId);
+        taskAudit.put("title", task.getTitle());
+        taskAudit.put("assignedToId", assignedTo != null ? assignedTo.getId() : null);
         auditService.log("COMPANION_TASK_CREATED", "Task", task.getId(), null,
-                Map.of("internshipId", internshipId, "title", task.getTitle(),
-                        "assignedToId", assignedTo != null ? assignedTo.getId() : null),
-                actor.getId(), null);
+                taskAudit, actor.getId(), null);
 
         // Phase A10: notify the assignee (not for self-assigned tasks).
         if (assignedTo != null && !assignedTo.getId().equals(creator.getId())) {
@@ -166,8 +169,12 @@ public class CompanionService {
         }
 
         task = taskRepository.save(task);
+        // E2: completedAt is null for non-COMPLETED statuses — Map.of forbids nulls.
+        java.util.Map<String, Object> statusAudit = new java.util.LinkedHashMap<>();
+        statusAudit.put("status", status);
+        statusAudit.put("completedAt", task.getCompletedAt());
         auditService.log("COMPANION_TASK_STATUS_CHANGED", "Task", taskId, null,
-                Map.of("status", status, "completedAt", task.getCompletedAt()), actor.getId(), null);
+                statusAudit, actor.getId(), null);
         return TaskResponse.from(task);
     }
 
@@ -345,9 +352,13 @@ public class CompanionService {
         deliverableVersionRepository.save(version);
 
         log.info("Deliverable {} new version {} uploaded by {}", deliverableId, nextVersion, uploader.getId());
+        // E2: changeSummary is optional — Map.of forbids nulls.
+        java.util.Map<String, Object> versionAudit = new java.util.LinkedHashMap<>();
+        versionAudit.put("currentVersion", nextVersion);
+        versionAudit.put("changeSummary", changeSummary);
         auditService.log("DELIVERABLE_VERSION_UPLOADED", "Deliverable", deliverableId,
                 Map.of("currentVersion", nextVersion - 1),
-                Map.of("currentVersion", nextVersion, "changeSummary", changeSummary), actor.getId(), null);
+                versionAudit, actor.getId(), null);
         return toDeliverableResponse(deliverable);
     }
 

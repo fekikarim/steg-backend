@@ -144,4 +144,102 @@ class InternshipClassificationServiceTest {
             assertThat(result.paymentEligible()).isTrue();
         }
     }
+
+    @Nested
+    @DisplayName("E1.1: academic-level hint (final-year PFE signal)")
+    class AcademicLevelTests {
+
+        @Test
+        @DisplayName("Final-year level in the 6w-3mo band overrides to PFE")
+        void finalYearOverridesBand() {
+            LocalDate start = LocalDate.of(2026, 6, 1);
+            LocalDate end = LocalDate.of(2026, 7, 31); // 61 days: band without hint
+
+            InternshipClassificationResult without = classificationService.classify(start, end, null, null);
+            assertThat(without.type()).isEqualTo(InternshipType.PERFECTIONNEMENT);
+
+            for (String level : new String[]{"PFE", "Projet de fin d'études", "Master 2", "5ème année", "final year"}) {
+                InternshipClassificationResult with = classificationService.classify(start, end, null, level);
+                assertThat(with.type()).as("level=%s", level).isEqualTo(InternshipType.PFE);
+                assertThat(with.requirement()).isEqualTo(InternshipRequirement.OBLIGATOIRE);
+                assertThat(with.paymentEligible()).isTrue();
+            }
+        }
+
+        @Test
+        @DisplayName("Non-final levels never override the duration band")
+        void nonFinalLevelsIgnored() {
+            LocalDate start = LocalDate.of(2026, 6, 1);
+            LocalDate end = LocalDate.of(2026, 7, 31);
+
+            for (String level : new String[]{null, "", "  ", "Licence 3", "Master 1", "L3", "3", "Cycle ingénieur"}) {
+                InternshipClassificationResult result = classificationService.classify(start, end, null, level);
+                assertThat(result.type()).as("level=%s", level).isEqualTo(InternshipType.PERFECTIONNEMENT);
+            }
+        }
+
+        @Test
+        @DisplayName("Short stays remain OBSERVATION even with a final-year level")
+        void shortStayIgnoresLevel() {
+            LocalDate start = LocalDate.of(2026, 6, 1);
+            LocalDate end = LocalDate.of(2026, 6, 20);
+
+            InternshipClassificationResult result = classificationService.classify(start, end, true, "PFE");
+
+            assertThat(result.type()).isEqualTo(InternshipType.OBSERVATION);
+            assertThat(result.requirement()).isEqualTo(InternshipRequirement.OBLIGATOIRE);
+        }
+
+        @Test
+        @DisplayName("Legacy 3-arg overload behaves as null level hint")
+        void legacyOverload() {
+            LocalDate start = LocalDate.of(2026, 6, 1);
+            LocalDate end = LocalDate.of(2026, 7, 31);
+
+            assertThat(classificationService.classify(start, end, null).type())
+                    .isEqualTo(InternshipType.PERFECTIONNEMENT);
+        }
+    }
+
+    @Nested
+    @DisplayName("E1.1: invalid combinations")
+    class InvalidCombinations {
+
+        @Test
+        @DisplayName("Null start date is rejected")
+        void nullStart() {
+            assertThatThrownBy(() -> classificationService.classify(null, LocalDate.of(2026, 6, 30), null, null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        @DisplayName("Null end date is rejected")
+        void nullEnd() {
+            assertThatThrownBy(() -> classificationService.classify(LocalDate.of(2026, 6, 1), null, null, null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        @DisplayName("Single-day stay is OBSERVATION")
+        void singleDay() {
+            LocalDate day = LocalDate.of(2026, 6, 1);
+
+            InternshipClassificationResult result = classificationService.classify(day, day, false, null);
+
+            assertThat(result.type()).isEqualTo(InternshipType.OBSERVATION);
+            assertThat(result.durationInDays()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("43 days (just above 6 weeks): PERFECTIONNEMENT regardless of flag")
+        void fortyThreeDays() {
+            LocalDate start = LocalDate.of(2026, 6, 1);
+            LocalDate end = start.plusDays(42); // 43 days inclusive
+
+            InternshipClassificationResult result = classificationService.classify(start, end, false, null);
+
+            assertThat(result.type()).isEqualTo(InternshipType.PERFECTIONNEMENT);
+            assertThat(result.requirement()).isEqualTo(InternshipRequirement.OBLIGATOIRE);
+        }
+    }
 }

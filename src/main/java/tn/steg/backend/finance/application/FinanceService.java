@@ -10,6 +10,9 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tn.steg.backend.audit.application.AuditService;
+import tn.steg.backend.certificate.domain.model.CertificateStatus;
+import tn.steg.backend.certificate.domain.repository.CertificateRepository;
+import tn.steg.backend.common.application.idempotency.IdempotencyService;
 import tn.steg.backend.common.domain.event.PaymentApprovedEvent;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
@@ -120,6 +123,8 @@ public class FinanceService {
     private final FileAssetRepository fileAssetRepository;
     private final FileStorageService fileStorageService;
     private final AuditService auditService;
+    private final CertificateRepository certificateRepository;
+    private final IdempotencyService idempotencyService;
     private final WorkflowService workflowService;
     private final ApplicationEventPublisher eventPublisher;
     private final PdfTemplateProvider templateProvider;
@@ -166,6 +171,16 @@ public class FinanceService {
         if (internship.getStatus() != InternshipStatus.COMPLETED) {
             throw new BusinessRuleException("INTERNSHIP_NOT_COMPLETED",
                     "A finance case can only be opened for a COMPLETED internship. Current: " + internship.getStatus());
+        }
+        // E1.3: a generated (non-revoked) official certificate is mandatory before
+        // any finance case may exist — enforced here, not merely hidden in the UI.
+        boolean certificatePresent = certificateRepository.findByInternshipId(internshipId).stream()
+                .anyMatch(c -> c.getStatus() == CertificateStatus.GENERATED
+                        || c.getStatus() == CertificateStatus.ISSUED);
+        if (!certificatePresent) {
+            throw new BusinessRuleException("INTERNSHIP_CERTIFICATE_REQUIRED",
+                    "A finance case requires a generated official certificate for internship: "
+                            + internship.getReference());
         }
         if (financeCaseRepository.findByInternshipId(internshipId).isPresent()) {
             throw new BusinessRuleException("FINANCE_CASE_ALREADY_EXISTS",
@@ -332,6 +347,15 @@ public class FinanceService {
 
     @Transactional
     public FinanceCaseResponse approve(UUID financeCaseId, PaymentDecisionRequest request, UserPrincipal actor) {
+        // E1.6: double approval attempts (double-click, retry) replay the stored response
+        // instead of issuing a second receipt. Receipt generation is inside approve(),
+        // so it shares the same key scope.
+        return idempotencyService.execute(actor.getId(),
+                IdempotencyService.currentKey().orElse(null),
+                () -> doApprove(financeCaseId, request, actor), FinanceCaseResponse.class);
+    }
+
+    private FinanceCaseResponse doApprove(UUID financeCaseId, PaymentDecisionRequest request, UserPrincipal actor) {
         Employee decider = requireFinanceEmployee(actor);
         FinanceCase financeCase = findMutableCaseOrThrow(financeCaseId);
         if (financeCase.getStatus() != FinanceCaseStatus.READY_FOR_DECISION) {
@@ -599,7 +623,10 @@ public class FinanceService {
         // The case row lock held by approve() serializes decisions per case, so
         // this insert cannot race a sibling approval; cross-case reference
         // races fall back to a safe 409 (count + exists-check first).
-        PaymentReceipt receipt = new PaymentReceipt(nextReceiptReference(), financeCase, fileAsset,
+        // E1.3 fix: reuse the single allocated `reference` above — a second
+        // nextReceiptReference() call here could persist a different reference
+        // than the one rendered into the PDF on counter races.
+        PaymentReceipt receipt = new PaymentReceipt(reference, financeCase, fileAsset,
                 calculation.getCappedAmount(), calculation.getPayableMonths(), calculation.getCurrencyCode());
         receipt.setIssuedBy(issuer);
         receipt.setStatus(PaymentReceiptStatus.ISSUED);

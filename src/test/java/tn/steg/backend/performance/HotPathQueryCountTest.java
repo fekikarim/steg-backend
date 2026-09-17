@@ -90,11 +90,14 @@ class HotPathQueryCountTest {
     @Autowired private InternshipService internshipService;
     @Autowired private MessagingService messagingService;
     @Autowired private FinanceService financeService;
+    @Autowired private tn.steg.backend.certificate.application.CertificateService certificateService;
 
     private UserPrincipal adminPrincipal;
     private UserPrincipal financePrincipal;
+    private UserPrincipal supervisorPrincipal;
     private Candidate candidateA;
     private Candidate candidateB;
+    private java.util.List<Candidate> candidates;
     private Department department;
     private Employee supervisor;
 
@@ -107,12 +110,19 @@ class HotPathQueryCountTest {
 
         department = departmentRepository.saveAndFlush(new Department("QC_DEPT", "QC Department", "QC"));
         User supUser = userRepository.saveAndFlush(new User("qc_sup@test.tn", "hash", UserStatus.ACTIVE));
+        supervisorPrincipal = new UserPrincipal(supUser.getId(), supUser.getEmail(), List.of("ROLE_SUPERVISOR"));
         supervisor = new Employee("QC-EMP-1", "Qc", "Sup", department);
         supervisor.setUser(supUser);
         supervisor = employeeRepository.saveAndFlush(supervisor);
 
         candidateA = createCandidate("qc_a@test.tn", "40000001");
         candidateB = createCandidate("qc_b@test.tn", "40000002");
+        // E1: one application per candidate (uq_applications_candidate_id) — five
+        // candidates carry one application each for the row-count assertions below.
+        candidates = new java.util.ArrayList<>(java.util.List.of(candidateA, candidateB,
+                createCandidate("qc_c@test.tn", "40000003"),
+                createCandidate("qc_d@test.tn", "40000004"),
+                createCandidate("qc_e@test.tn", "40000005")));
     }
 
     private Candidate createCandidate(String email, String cin) throws Exception {
@@ -141,24 +151,15 @@ class HotPathQueryCountTest {
     }
 
     private void seedApplications() {
-        for (int i = 1; i <= 3; i++) {
+        int i = 0;
+        for (Candidate c : candidates) {
+            i++;
             InternshipApplication app = new InternshipApplication();
-            app.setReference("APP-QC-A-" + i);
-            app.setCandidate(candidateA);
-            app.setStatus(ApplicationStatus.DRAFT);
+            app.setReference("APP-QC-" + i);
+            app.setCandidate(c);
+            app.setStatus(i == 1 ? ApplicationStatus.DRAFT : ApplicationStatus.SUBMITTED);
             app.setDesiredStartDate(LocalDate.of(2026, 7, 1));
             app.setDesiredEndDate(LocalDate.of(2026, 8, 31));
-            app.setProposedTheme("Theme " + i);
-            applicationRepository.save(app);
-        }
-        for (int i = 1; i <= 2; i++) {
-            InternshipApplication app = new InternshipApplication();
-            app.setReference("APP-QC-B-" + i);
-            app.setCandidate(candidateB);
-            app.setStatus(ApplicationStatus.SUBMITTED);
-            app.setDesiredStartDate(LocalDate.of(2026, 7, 1));
-            app.setDesiredEndDate(LocalDate.of(2026, 8, 31));
-            app.setProposedTheme("Theme B" + i);
             applicationRepository.save(app);
         }
     }
@@ -207,7 +208,7 @@ class HotPathQueryCountTest {
                 candidateA.getEmail(), List.of("ROLE_CANDIDATE"));
 
         long queries = countQueries(() ->
-                assertThat(applicationService.listApplications(candA)).hasSize(3));
+                assertThat(applicationService.listApplications(candA)).hasSize(1));
 
         assertThat(queries).as("candidate application list must be bounded, was %d", queries)
                 .isLessThanOrEqualTo(3);
@@ -277,9 +278,11 @@ class HotPathQueryCountTest {
     @DisplayName("finance case list page is bounded (no per-case child queries)")
     void financeCaseListIsBounded() {
         for (int i = 1; i <= 3; i++) {
-            Internship internship = seedInternship(i % 2 == 0 ? candidateB : candidateA, "F" + i);
+            Internship internship = seedInternship(candidates.get(i - 1), "F" + i);
             internship.setStatus(InternshipStatus.COMPLETED);
             internshipRepository.save(internship);
+            // E1.3: cases require a generated certificate.
+            certificateService.generateCertificate(internship.getId(), supervisorPrincipal);
             financeService.openFinanceCase(internship.getId(), financePrincipal);
         }
 

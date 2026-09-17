@@ -24,6 +24,12 @@ logging:
     tn.steg.backend: INFO
     org.springframework.security: WARN
 
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
 steg:
   security:
     jwt:

@@ -9,15 +9,24 @@ import tn.steg.backend.ai.domain.assembler.ApplicationDocumentContentAssembler;
 import tn.steg.backend.ai.domain.assembler.AssembledAiContent;
 import tn.steg.backend.ai.domain.assembler.CandidateAssistantContentAssembler;
 import tn.steg.backend.ai.domain.assembler.FinanceCaseContentAssembler;
+import tn.steg.backend.ai.domain.assembler.InternAssistantContentAssembler;
 import tn.steg.backend.ai.domain.assembler.LogbookContentAssembler;
 import tn.steg.backend.ai.domain.client.AiCompletionClient;
 import tn.steg.backend.ai.domain.client.AiCompletionResult;
+import tn.steg.backend.ai.domain.knowledge.StegKnowledgeBase;
 import tn.steg.backend.ai.domain.model.AiAnalysis;
 import tn.steg.backend.ai.domain.model.AiAnalysisType;
 import tn.steg.backend.ai.domain.model.AiRecommendation;
 import tn.steg.backend.ai.domain.model.AiRecommendationStatus;
 import tn.steg.backend.ai.domain.repository.AiAnalysisRepository;
 import tn.steg.backend.ai.domain.repository.AiRecommendationRepository;
+import tn.steg.backend.ai.domain.service.LogbookFidelityGate;
+import tn.steg.backend.ai.domain.service.LogbookFidelityGate.CheckResult;
+import tn.steg.backend.ai.domain.service.LogbookFidelityGate.SourceEntry;
+import tn.steg.backend.companion.domain.repository.DeliverableRepository;
+import tn.steg.backend.companion.domain.repository.InternshipJournalRepository;
+import tn.steg.backend.companion.domain.repository.JournalEntryRepository;
+import tn.steg.backend.companion.domain.repository.TaskRepository;
 import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.candidate.domain.model.Candidate;
 import tn.steg.backend.candidate.domain.repository.CandidateRepository;
@@ -32,6 +41,7 @@ import tn.steg.backend.organization.domain.repository.EmployeeRepository;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -58,6 +68,13 @@ public class AiService {
     private final FinanceCaseContentAssembler financeCaseAssembler;
     private final LogbookContentAssembler logbookAssembler;
     private final CandidateAssistantContentAssembler candidateAssistantAssembler;
+    private final InternAssistantContentAssembler internAssistantAssembler;
+    private final StegKnowledgeBase knowledgeBase;
+    private final LogbookFidelityGate fidelityChecker;
+    private final InternshipJournalRepository journalRepository;
+    private final JournalEntryRepository journalEntryRepository;
+    private final TaskRepository taskRepository;
+    private final DeliverableRepository deliverableRepository;
     private final CandidateRepository candidateRepository;
     private final UserRepository userRepository;
     private final EmployeeRepository employeeRepository;
@@ -206,20 +223,96 @@ public class AiService {
             );
         }
 
-        // 4. Record output & advisory recommendation (PROPOSED draft)
-        analysis.setOutputSummary(result.content());
+        // 4. Record output & advisory recommendation (PROPOSED draft) with fidelity gate:
+        // every date must exist in source records, every line must map to a source entry.
+        CheckResult fidelity = checkLogbookFidelity(internshipId, result.content());
+        String displayText = fidelity.filteredText();
+        if (!fidelity.clean()) {
+            log.warn("Logbook fidelity gate stripped {} unmapped line(s) for internship {}",
+                    fidelity.strippedLines().size(), internshipId);
+            displayText += "\n\n[Contrôle d'intégrité : " + fidelity.strippedLines().size()
+                    + " ligne(s) non rattachée(s) aux activités enregistrées ont été retirées. "
+                    + "Vérifiez le brouillon avant validation.]";
+        }
+        analysis.setOutputSummary(displayText);
         aiAnalysisRepository.save(analysis);
 
-        AiRecommendation recommendation = new AiRecommendation(analysis, result.content());
+        AiRecommendation recommendation = new AiRecommendation(analysis, displayText);
         recommendation = aiRecommendationRepository.save(recommendation);
 
         auditService.log("AI_LOGBOOK_GENERATED", "AiAnalysis", analysis.getId(), null, null, actor.getId(), null);
 
         return new AiAnalysisResultResponse(
                 AiAnalysisResponse.from(analysis),
-                List.of(AiRecommendationResponse.from(recommendation)),
+                Collections.emptyList(),
                 result.content()
         );
+    }
+
+    /**
+     * E2: onboarding chatbot — registered candidate without a completed profile.
+     * KB sheets only; related entity is the user (no candidate row exists yet).
+     */
+    @Transactional
+    public AiAnalysisResultResponse queryCandidateGeneric(CandidateAssistantQueryRequest request, UserPrincipal actor) {
+        AssembledAiContent assembled =
+                candidateAssistantAssembler.assembleGeneric(request.question(), knowledgeBase);
+
+        User requestedBy = userRepository.findById(actor.getId()).orElse(null);
+        AiAnalysis analysis = new AiAnalysis(
+                AiAnalysisType.CANDIDATE_ASSISTANT_QUERY,
+                "User",
+                actor.getId(),
+                aiCompletionClient.getModel()
+        );
+        analysis.setCinExcluded(true);
+        analysis.setInputSummary(assembled.inputSummary());
+        analysis.setRequestedBy(requestedBy);
+        analysis = aiAnalysisRepository.save(analysis);
+
+        AiCompletionResult result = aiCompletionClient.complete(assembled.systemInstruction(), assembled.promptParts());
+
+        if (!result.success()) {
+            analysis.setOutputSummary("AI_UNAVAILABLE: " + result.errorMessage());
+            aiAnalysisRepository.save(analysis);
+            return new AiAnalysisResultResponse(
+                    AiAnalysisResponse.from(analysis),
+                    Collections.emptyList(),
+                    "Service d'assistance temporairement indisponible: " + result.errorMessage()
+            );
+        }
+
+        analysis.setOutputSummary(result.content());
+        aiAnalysisRepository.save(analysis);
+
+        auditService.log("AI_ASSISTANT_QUERIED", "User", actor.getId(), null,
+                Map.of("analysisId", analysis.getId().toString(), "input", assembled.inputSummary()),
+                actor.getId(), null, AuditService.primaryRole(actor.getRoles()), null);
+
+        return new AiAnalysisResultResponse(
+                AiAnalysisResponse.from(analysis),
+                Collections.emptyList(),
+                result.content()
+        );
+    }
+
+    private CheckResult checkLogbookFidelity(UUID internshipId, String draft) {
+        try {
+            List<SourceEntry> sources = new java.util.ArrayList<>();
+            journalRepository.findByInternshipId(internshipId).ifPresent(journal ->
+                    journalEntryRepository.findByJournalId(journal.getId()).forEach(je ->
+                            sources.add(new SourceEntry(je.getEntryDate(),
+                                    (je.getTitle() == null ? "" : je.getTitle()) + " "
+                                            + (je.getDescription() == null ? "" : je.getDescription())))));
+            taskRepository.findByInternshipId(internshipId).forEach(t ->
+                    sources.add(new SourceEntry(null, t.getTitle())));
+            deliverableRepository.findByInternshipId(internshipId).forEach(d ->
+                    sources.add(new SourceEntry(null, d.getTitle())));
+            return fidelityChecker.check(draft, sources);
+        } catch (Exception ex) {
+            log.warn("Logbook fidelity check degraded (fail-open with flag): {}", ex.getClass().getSimpleName());
+            return new CheckResult(draft, List.of(), false);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -228,8 +321,19 @@ public class AiService {
 
     @Transactional
     public AiAnalysisResultResponse queryCandidateAssistant(CandidateAssistantQueryRequest request, UserPrincipal actor) {
-        Candidate candidate = candidateRepository.findByUserId(actor.getId())
-                .orElseThrow(() -> new ResourceNotFoundException("Candidate profile not found for user: " + actor.getId()));
+        // E2: role-scoped branching. CANDIDATE role → candidate context (profile if
+        // completed, generic KB context while onboarding); other roles → internship context.
+        // Same endpoint, same contract.
+        if (!actor.hasRole("CANDIDATE")) {
+            return queryInternAssistant(request, actor);
+        }
+        return candidateRepository.findByUserId(actor.getId())
+                .map(candidate -> queryCandidateWithProfile(request, actor, candidate))
+                .orElseGet(() -> queryCandidateGeneric(request, actor));
+    }
+
+    private AiAnalysisResultResponse queryCandidateWithProfile(CandidateAssistantQueryRequest request,
+                                                               UserPrincipal actor, Candidate candidate) {
 
         AssembledAiContent assembled = candidateAssistantAssembler.assemble(candidate.getId(), request.question());
 
@@ -259,6 +363,58 @@ public class AiService {
 
         analysis.setOutputSummary(result.content());
         aiAnalysisRepository.save(analysis);
+
+        // E1.5: every AI invocation is audited (field-level summary only, never content).
+        auditService.log("AI_ASSISTANT_QUERIED", "Candidate", candidate.getId(), null,
+                Map.of("analysisId", analysis.getId().toString(), "input", assembled.inputSummary()),
+                actor.getId(), null, AuditService.primaryRole(actor.getRoles()), null);
+
+        return new AiAnalysisResultResponse(
+                AiAnalysisResponse.from(analysis),
+                Collections.emptyList(),
+                result.content()
+        );
+    }
+
+    /**
+     * Mobile intern/supervisor assistant: same contract as the candidate endpoint,
+     * but assembled from the participant's actual internship + knowledge base.
+     */
+    @Transactional
+    public AiAnalysisResultResponse queryInternAssistant(CandidateAssistantQueryRequest request, UserPrincipal actor) {
+        AssembledAiContent assembled = internAssistantAssembler.assemble(actor.getId(), request.question());
+
+        User requestedBy = userRepository.findById(actor.getId()).orElse(null);
+        AiAnalysis analysis = new AiAnalysis(
+                AiAnalysisType.INTERN_ASSISTANT_QUERY,
+                "User",
+                actor.getId(),
+                aiCompletionClient.getModel()
+        );
+        analysis.setCinExcluded(true);
+        analysis.setInputSummary(assembled.inputSummary());
+        analysis.setRequestedBy(requestedBy);
+        analysis = aiAnalysisRepository.save(analysis);
+
+        AiCompletionResult result = aiCompletionClient.complete(assembled.systemInstruction(), assembled.promptParts());
+
+        if (!result.success()) {
+            analysis.setOutputSummary("AI_UNAVAILABLE: " + result.errorMessage());
+            aiAnalysisRepository.save(analysis);
+            return new AiAnalysisResultResponse(
+                    AiAnalysisResponse.from(analysis),
+                    Collections.emptyList(),
+                    "Service d'assistance temporairement indisponible: " + result.errorMessage()
+            );
+        }
+
+        analysis.setOutputSummary(result.content());
+        aiAnalysisRepository.save(analysis);
+
+        // E1.5: every AI invocation is audited (field-level summary only, never content).
+        auditService.log("AI_ASSISTANT_QUERIED", "User", actor.getId(), null,
+                Map.of("analysisId", analysis.getId().toString(), "input", assembled.inputSummary()),
+                actor.getId(), null, AuditService.primaryRole(actor.getRoles()), null);
 
         return new AiAnalysisResultResponse(
                 AiAnalysisResponse.from(analysis),

@@ -72,7 +72,7 @@ public class CandidateController {
     /**
      * List all candidates — nationalId is intentionally omitted in the response.
      */
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR', 'SUPERVISOR', 'FINANCE', 'DIRECTOR')")
     @GetMapping("/candidates")
     @Operation(summary = "List all candidates (staff only)",
                description = "Returns summary view — nationalId (CIN) is never included.")
@@ -83,7 +83,7 @@ public class CandidateController {
     /**
      * Candidate detail — includes nationalId only for the candidate themselves or ADMIN/HR.
      */
-    @PreAuthorize("@authz.hasAnyRole('CANDIDATE', 'ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasAnyRole('CANDIDATE', 'ADMIN', 'HR', 'SUPERVISOR', 'FINANCE', 'DIRECTOR')")
     @GetMapping("/candidates/{id}")
     @Operation(summary = "Get candidate by ID",
                description = "Full profile including nationalId. Accessible to the candidate themselves or staff.")
@@ -96,7 +96,7 @@ public class CandidateController {
     /**
      * Update candidate profile — own profile or staff.
      */
-    @PreAuthorize("@authz.hasAnyRole('CANDIDATE', 'ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasAnyRole('CANDIDATE', 'ADMIN', 'HR', 'SUPERVISOR', 'FINANCE', 'DIRECTOR')")
     @PutMapping("/candidates/{id}")
     @Operation(summary = "Update candidate profile",
                description = "The candidate can update their own profile; ADMIN/HR may update any.")

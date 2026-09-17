@@ -9,7 +9,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import tn.steg.backend.application.domain.model.InternshipApplication;
 import tn.steg.backend.application.domain.repository.InternshipApplicationRepository;
+import tn.steg.backend.ai.domain.client.DocIntelClient;
+import tn.steg.backend.candidate.domain.repository.CandidateRepository;
 import tn.steg.backend.audit.application.AuditService;
+import tn.steg.backend.common.application.idempotency.IdempotencyService;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
@@ -35,6 +38,7 @@ import java.io.InputStream;
 import java.time.Instant;
 import java.time.Year;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -55,6 +59,9 @@ public class DocumentService {
     private final UserRepository userRepository;
     private final EmployeeRepository employeeRepository;
     private final AuditService auditService;
+    private final DocIntelClient pythonDocIntel;
+    private final CandidateRepository candidateRepository;
+    private final IdempotencyService idempotencyService;
 
     /** Business facts for cross-cutting concerns; never a dependency on consumers (Phase A10). */
     private final ApplicationEventPublisher eventPublisher;
@@ -65,6 +72,14 @@ public class DocumentService {
 
     @Transactional
     public DocumentResponse uploadDocument(MultipartFile file, DocumentType type, UserPrincipal uploader) {
+        // E1.6: mobile retries / reconnect replays with the same key replay the stored
+        // response instead of storing a second file + document row.
+        return idempotencyService.execute(uploader.getId(),
+                IdempotencyService.currentKey().orElse(null),
+                () -> doUploadDocument(file, type, uploader), DocumentResponse.class);
+    }
+
+    private DocumentResponse doUploadDocument(MultipartFile file, DocumentType type, UserPrincipal uploader) {
         if (file == null || file.isEmpty()) {
             throw new BusinessRuleException("EMPTY_FILE", "Uploaded file cannot be empty.");
         }
@@ -132,19 +147,78 @@ public class DocumentService {
         version = documentVersionRepository.save(version);
 
         log.info("Document uploaded: ref={} type={} by user={}", reference, type, uploader.getId());
+        // E1.5: every document upload writes an audit record (field-level only, never content).
+        auditService.log("DOCUMENT_UPLOADED", "Document", document.getId(), null,
+                Map.of("reference", reference, "type", type.name(), "sizeBytes", validation.sizeBytes()),
+                uploader.getId(), null, AuditService.primaryRole(uploader.getRoles()), null);
+
+        // Advisory smart-detector (E2.1): never blocks the upload. Validates the two
+        // application PDFs (type keywords + candidate full name) via the Python service.
+        runAdvisoryDocIntel(bytes, type, uploader.getId(), document.getId());
+
         return DocumentResponse.from(document, version, fileAsset);
+    }
+
+    private void runAdvisoryDocIntel(byte[] bytes, DocumentType type, UUID uploaderId, UUID documentId) {
+        if (type != DocumentType.INTERNSHIP_APPLICATION && type != DocumentType.ASSIGNMENT_LETTER) {
+            return;
+        }
+        try {
+            String fullName = candidateRepository.findByUserId(uploaderId)
+                    .map(c -> (c.getFirstName() == null ? "" : c.getFirstName() + " ")
+                            + (c.getLastName() == null ? "" : c.getLastName()))
+                    .map(String::strip).filter(s -> !s.isEmpty()).orElse(null);
+            pythonDocIntel.validateDocument(bytes, type.name(), fullName).ifPresent(v -> {
+                // Field-level audit only — never document content.
+                auditService.log("DOCUMENT_AI_VALIDATED", "Document", documentId,
+                        null, "valid=" + v.valid() + ",typeValid=" + v.documentTypeValid()
+                                + ",nameValid=" + v.candidateNameValid() + ",confidence=" + v.confidence(),
+                        uploaderId, null);
+                log.info("Advisory doc-intel for {}: valid={} confidence={}", documentId, v.valid(), v.confidence());
+            });
+        } catch (Exception ex) {
+            log.warn("Advisory doc-intel degraded for {}: {}", documentId, ex.getClass().getSimpleName());
+        }
     }
 
     @Transactional(readOnly = true)
     public DocumentResponse getDocumentMetadata(UUID documentId, UserPrincipal actor) {
         Document document = documentRepository.findById(documentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Document not found: " + documentId));
+        // E2 IDOR fix: metadata is access-controlled like the bytes (see below).
+        assertCanAccessDocument(document, actor);
 
         DocumentVersion latestVersion = documentVersionRepository.findTopByDocumentIdOrderByVersionNumberDesc(documentId)
                 .orElse(null);
         FileAsset fileAsset = latestVersion != null ? latestVersion.getFile() : null;
 
         return DocumentResponse.from(document, latestVersion, fileAsset);
+    }
+
+    /**
+     * E2 IDOR fix: a document is visible only to its uploader (owner) and to staff
+     * holding all-documents read (ADMIN/HR/SUPERVISOR/FINANCE/DIRECTOR, mirroring
+     * DOCUMENT_ALL_READ). Everyone else gets 403 — no existence oracle change
+     * (unknown ids still 404 above).
+     */
+    private void assertCanAccessDocument(Document document, UserPrincipal actor) {
+        if (isStaffReader(actor)) {
+            return;
+        }
+        DocumentVersion latestVersion = documentVersionRepository
+                .findTopByDocumentIdOrderByVersionNumberDesc(document.getId()).orElse(null);
+        boolean owner = latestVersion != null && latestVersion.getFile() != null
+                && latestVersion.getFile().getUploadedBy() != null
+                && latestVersion.getFile().getUploadedBy().getId().equals(actor.getId());
+        if (!owner) {
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "You do not have permission to access this document.");
+        }
+    }
+
+    private boolean isStaffReader(UserPrincipal actor) {
+        return actor.hasRole("ADMIN") || actor.hasRole("HR") || actor.hasRole("SUPERVISOR")
+                || actor.hasRole("FINANCE") || actor.hasRole("DIRECTOR");
     }
 
     public record DownloadStream(InputStream inputStream, String fileName, String mimeType, long size) {}
@@ -159,6 +233,8 @@ public class DocumentService {
             throw new org.springframework.security.access.AccessDeniedException(
                     "This document has restricted access (CIN). Please use the restricted download endpoint with proper authorization.");
         }
+        // E2 IDOR fix: non-restricted bytes are still owner-or-staff only.
+        assertCanAccessDocument(document, actor);
 
         DocumentVersion latestVersion = documentVersionRepository.findTopByDocumentIdOrderByVersionNumberDesc(documentId)
                 .orElseThrow(() -> new ResourceNotFoundException("No version found for document: " + documentId));

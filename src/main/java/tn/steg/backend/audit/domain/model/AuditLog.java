@@ -43,6 +43,14 @@ public class AuditLog extends BaseEntity {
     @Column(name = "ip_address", length = 45)
     private String ipAddress;
 
+    /** Actor role at action time (E1.5) — snapshot, never re-resolved later. */
+    @Column(name = "role_code", length = 50)
+    private String roleCode;
+
+    /** Request correlation id (E1.5) — matches X-Trace-Id header and log MDC. */
+    @Column(name = "trace_id", length = 64)
+    private String traceId;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "actor_id")
     private User actor;

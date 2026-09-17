@@ -1,0 +1,29 @@
+# E0.4 — `integration` profile: seeded demo data for E0–E2 lifecycle testing.
+# Extends `local` ergonomics (show-sql) and activates the dedicated
+# IntegrationDemoSeeder (demo module, never Flyway). Empty DB + migrations first,
+# then seeder inserts fictional accounts. See docs/E0_4_E0_5_SEEDING.md.
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/steg_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    show-sql: true
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+logging:
+  level:
+    tn.steg.backend: INFO
+    tn.steg.backend.common.infrastructure.seed: INFO
+
+steg:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:4200}
+  # Demo seeding switch (default true on this profile; set false to get clean+integration-config without rows).
+  seed:
+    demo-enabled: ${STEG_SEED_DEMO_ENABLED:true}
+    # Plaintext demo passwords are DEV-ONLY defaults; override via env in shared environments.
+    demo-password: ${STEG_SEED_DEMO_PASSWORD:Demo#2026}
