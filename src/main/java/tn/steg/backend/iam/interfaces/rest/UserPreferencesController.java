@@ -28,6 +28,7 @@ public class UserPreferencesController {
     private static final Set<String> SUPPORTED = Set.of("fr", "en", "ar");
 
     @PutMapping("/locale")
+    @org.springframework.security.access.prepost.PreAuthorize("isAuthenticated()")
     @Operation(summary = "Update preferred locale for current user",
             description = "Persists fr/en/ar for email notifications and future sessions. Backend also respects Accept-Language header per-request for validation messages.")
     public ResponseEntity<Void> updateLocale(

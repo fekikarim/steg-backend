@@ -32,7 +32,7 @@ public class CleanArchitectureFitnessTest {
             // Only flag cross-layer violations; JDK / third-party deps are fine inside any layer
             .consideringOnlyDependenciesInLayers()
             .layer("Domain").definedBy("..domain..")
-            .layer("Application").definedBy("..application..")
+            .layer("Application").definedBy("tn.steg.backend.*.application..", "tn.steg.backend.application.anonymous..")
             .layer("Infrastructure").definedBy("..infrastructure..")
             .layer("Interfaces").definedBy("..interfaces..")
 

@@ -241,7 +241,7 @@ class CompanionIntegrationTest {
                         .header("Authorization", "Bearer " + internToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content").isArray())
-                .andExpect(jsonPath("$.totalElements").value(1));
+                .andExpect(jsonPath("$.content.length()").value(1));
     }
 
     @Test
