@@ -14,6 +14,7 @@ import tn.steg.backend.application.application.dto.AnonymousApplicationSubmitReq
 import tn.steg.backend.application.application.dto.AnonymousSubmissionResponse;
 import tn.steg.backend.application.application.dto.PublicApplicationTrackRequest;
 import tn.steg.backend.application.application.dto.PublicApplicationTrackingResponse;
+import tn.steg.backend.application.domain.model.ApplicationStatus;
 import tn.steg.backend.application.domain.repository.InternshipApplicationRepository;
 import tn.steg.backend.candidate.domain.model.Candidate;
 import tn.steg.backend.candidate.domain.repository.CandidateRepository;
