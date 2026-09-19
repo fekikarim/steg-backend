@@ -23,4 +23,10 @@ public interface DocIntelClient {
 
     Optional<FinanceVerification> verifyFinance(byte[] certificatePdf, byte[] reportPdf,
             String internFullName, String period, String internshipType);
+
+    /** Whether the underlying provider is configured (non-empty baseUrl + token). */
+    default boolean isConfigured() { return true; }
+
+    /** Whether the circuit is open and calls should be short-circuited. */
+    default boolean circuitOpen() { return false; }
 }

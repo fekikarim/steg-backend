@@ -215,6 +215,32 @@ public class DocumentController {
                 .body(documentService.attachDocumentToInternship(id, request.documentId(), request.mandatory(), actor));
     }
 
+    // -------------------------------------------------------------------------
+    // AI Document Validation (Python doc-intel – real-time wizard gate)
+    // -------------------------------------------------------------------------
+
+    @PostMapping("/api/documents/{id}/validation")
+    @PreAuthorize("isAuthenticated()")
+    @Operation(summary = "AI-validate a stored document (wizard step 4 gate)",
+            description = "Browser → Spring Boot → Python (PDF text layer + OCR fallback + trilingual keywords + full-name either-order). "
+                    + "Returns valid/documentTypeValid/candidateNameValid/confidence/reason. Expected type defaults to the stored document type; "
+                    + "fullName defaults to the caller's candidate profile. Front-ends must disable Continue until valid=true.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Validation result"),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "404", description = "Document not found"),
+            @ApiResponse(responseCode = "503", description = "AI service not configured or temporarily unavailable")
+    })
+    public ResponseEntity<tn.steg.backend.document.application.dto.DocumentAiValidationResponse> validateStoredDocument(
+            @PathVariable UUID id,
+            @RequestBody(required = false) tn.steg.backend.document.application.dto.DocumentAiValidationRequest body,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        String expectedType = body != null ? body.expectedType() : null;
+        String fullName = body != null ? body.fullName() : null;
+        var result = documentService.validateStoredDocumentAi(id, expectedType, fullName, actor);
+        return ResponseEntity.ok(result);
+    }
+
     private String extractClientIp(HttpServletRequest request) {
         String xForwardedFor = request.getHeader("X-Forwarded-For");
         if (xForwardedFor != null && !xForwardedFor.isBlank()) {

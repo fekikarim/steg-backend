@@ -388,6 +388,100 @@ public class DocumentService {
         return InternshipDocumentResponse.from(idDoc, DocumentResponse.from(document, lv, fa));
     }
 
+    /**
+     * Synchronous AI validation for a stored document (authenticated flow).
+     * Browser → Spring Boot → Python (text layer + OCR fallback + trilingual
+     * keyword + full-name either-order check) → Spring Boot → browser.
+     * Returns a structured result the wizard uses to gate the Continue button.
+     * If the Python service is not configured or temporarily degraded, the
+     * caller receives a 503 with a retryable reason.
+     */
+    @Transactional(readOnly = true)
+    public tn.steg.backend.document.application.dto.DocumentAiValidationResponse validateStoredDocumentAi(
+            UUID documentId, String expectedTypeOverride, String fullNameOverride, UserPrincipal actor) {
+        Document document = documentRepository.findById(documentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Document not found: " + documentId));
+        assertCanAccessDocument(document, actor);
+
+        String expectedType = expectedTypeOverride != null && !expectedTypeOverride.isBlank()
+                ? expectedTypeOverride.trim().toUpperCase()
+                : document.getType().name();
+
+        String fullName = fullNameOverride != null && !fullNameOverride.isBlank()
+                ? fullNameOverride.trim()
+                : candidateRepository.findByUserId(actor.getId())
+                        .map(c -> ((c.getFirstName() == null ? "" : c.getFirstName() + " ")
+                                + (c.getLastName() == null ? "" : c.getLastName())).strip())
+                        .filter(s -> !s.isEmpty()).orElse(null);
+
+        DocumentVersion latestVersion = documentVersionRepository
+                .findTopByDocumentIdOrderByVersionNumberDesc(documentId)
+                .orElseThrow(() -> new ResourceNotFoundException("No version found for document: " + documentId));
+        FileAsset fileAsset = latestVersion.getFile();
+        byte[] bytes;
+        try (java.io.InputStream is = fileStorageService.getInputStream(fileAsset.getStorageKey())) {
+            bytes = is.readAllBytes();
+        } catch (IOException e) {
+            throw new BusinessRuleException("FILE_READ_ERROR", "Could not read document for AI validation.");
+        }
+
+        var result = pythonDocIntel.validateDocument(bytes, expectedType, fullName);
+        if (result.isEmpty()) {
+            if (!pythonDocIntel.isConfigured()) {
+                throw new BusinessRuleException("AI_UNAVAILABLE", "Document validation service is not configured.");
+            }
+            if (pythonDocIntel.circuitOpen()) {
+                throw new BusinessRuleException("AI_TEMPORARILY_UNAVAILABLE",
+                        "Document validation is temporarily unavailable — please retry in a few seconds.");
+            }
+            throw new BusinessRuleException("AI_UNAVAILABLE", "Document validation did not return a result — please retry.");
+        }
+        var v = result.get();
+        boolean validBool = "true".equalsIgnoreCase(v.valid()) || "valid".equalsIgnoreCase(v.valid());
+        // Python returns valid as string "true"/"false" via root.path("valid").asText() – handle both.
+        // Fall back to computed field when string parsing is ambiguous.
+        // The advisory `valid` is authoritative from Python (type && name).
+        auditService.log("DOCUMENT_AI_VALIDATED", "Document", documentId, null,
+                "valid=" + validBool + ",typeValid=" + v.documentTypeValid()
+                        + ",nameValid=" + v.candidateNameValid() + ",confidence=" + v.confidence(),
+                actor.getId(), null);
+        log.info("AI validation for doc {} (type {}): valid={} confidence={}", documentId, expectedType, validBool, v.confidence());
+        return new tn.steg.backend.document.application.dto.DocumentAiValidationResponse(
+                documentId, validBool, v.documentTypeValid(), v.candidateNameValid(),
+                v.confidence(), v.reason(), "1");
+    }
+
+    /**
+     * Ad-hoc public validation (anonymous wizard step 4). No document is
+     * persisted; bytes are validated in-memory so a candidate can see the AI
+     * gate before creating an account.
+     */
+    public tn.steg.backend.document.application.dto.DocumentAiValidationResponse validatePublicDocumentAi(
+            byte[] bytes, String expectedType, String fullName) {
+        if (bytes == null || bytes.length == 0) {
+            throw new BusinessRuleException("EMPTY_FILE", "Uploaded file cannot be empty.");
+        }
+        String type = expectedType != null ? expectedType.trim().toUpperCase() : "";
+        String name = fullName != null && !fullName.isBlank() ? fullName.trim() : null;
+        var result = pythonDocIntel.validateDocument(bytes, type, name);
+        if (result.isEmpty()) {
+            if (!pythonDocIntel.isConfigured()) {
+                throw new BusinessRuleException("AI_UNAVAILABLE", "Document validation service is not configured.");
+            }
+            if (pythonDocIntel.circuitOpen()) {
+                throw new BusinessRuleException("AI_TEMPORARILY_UNAVAILABLE",
+                        "Document validation is temporarily unavailable — please retry in a few seconds.");
+            }
+            throw new BusinessRuleException("AI_UNAVAILABLE", "Document validation did not return a result — please retry.");
+        }
+        var v = result.get();
+        boolean validBool = "true".equalsIgnoreCase(v.valid()) || "valid".equalsIgnoreCase(v.valid());
+        log.info("Public AI validation (type {}): valid={} confidence={}", type, validBool, v.confidence());
+        return new tn.steg.backend.document.application.dto.DocumentAiValidationResponse(
+                null, validBool, v.documentTypeValid(), v.candidateNameValid(),
+                v.confidence(), v.reason(), "1");
+    }
+
     private String generateDocumentReference() {
         int year = Year.now().getValue();
         String prefix = "DOC-" + year + "-";

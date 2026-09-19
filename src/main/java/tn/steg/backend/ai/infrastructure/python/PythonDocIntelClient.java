@@ -52,10 +52,12 @@ public class PythonDocIntelClient implements DocIntelClient {
         this.restClient = builder.build();
     }
 
+    @Override
     public boolean isConfigured() {
         return !props.getBaseUrl().isBlank() && !props.getServiceToken().isBlank();
     }
 
+    @Override
     public boolean circuitOpen() {
         return consecutiveFailures.get() >= props.getCircuitBreakerThreshold();
     }

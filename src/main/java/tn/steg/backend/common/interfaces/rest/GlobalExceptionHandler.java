@@ -81,6 +81,19 @@ public class GlobalExceptionHandler {
     }
     @ExceptionHandler(BusinessRuleException.class)
     public ResponseEntity<ErrorEnvelope> handleBusinessRuleException(BusinessRuleException ex, HttpServletRequest request) {
+        // AI validation service degraded – surface as 503 so clients can retry
+        // with a distinct path from business validation failures (422).
+        if ("AI_UNAVAILABLE".equals(ex.getErrorCode()) || "AI_TEMPORARILY_UNAVAILABLE".equals(ex.getErrorCode())) {
+            ErrorEnvelope envelope = buildEnvelope(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    ex.getErrorCode(),
+                    ex.getMessage(),
+                    request,
+                    null
+            );
+            log.warn("AI service unavailable on path {}: {} - {}", request.getRequestURI(), ex.getErrorCode(), ex.getMessage());
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(envelope);
+        }
         ErrorEnvelope envelope = buildEnvelope(
                 HttpStatus.UNPROCESSABLE_ENTITY,
                 ex.getErrorCode(),
