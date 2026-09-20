@@ -35,6 +35,8 @@ public class PythonDocIntelClient implements DocIntelClient {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
+    private volatile long lastFailureMillis = 0;
+    private static final long CIRCUIT_RESET_MILLIS = 60_000; // 60s half-open: try again after 1 minute
 
     public PythonDocIntelClient(PythonProperties props, ObjectMapper objectMapper) {
         this.props = props;
@@ -59,7 +61,18 @@ public class PythonDocIntelClient implements DocIntelClient {
 
     @Override
     public boolean circuitOpen() {
-        return consecutiveFailures.get() >= props.getCircuitBreakerThreshold();
+        int failures = consecutiveFailures.get();
+        if (failures < props.getCircuitBreakerThreshold()) {
+            return false;
+        }
+        // Half-open after reset interval: allow a trial call to probe recovery
+        long elapsed = System.currentTimeMillis() - lastFailureMillis;
+        if (elapsed > CIRCUIT_RESET_MILLIS) {
+            log.info("Python AI circuit half-open after {}ms (failures={}), allowing trial", elapsed, failures);
+            // Don't reset count yet — if trial succeeds, ok() will clear it; if fails, fail() will bump and stay open
+            return false;
+        }
+        return true;
     }
 
     /** Smart document detector: type keywords + candidate-name match (+ OCR fallback server-side). */
@@ -72,7 +85,7 @@ public class PythonDocIntelClient implements DocIntelClient {
             String body = objectMapper.writeValueAsString(new ValidationPayload(
                     Base64.getEncoder().encodeToString(pdf), expectedType, fullName, SERVICE_VERSION));
             JsonNode root = post("/api/doc-intel/validate", body);
-            if (root == null || !root.hasNonNull("valid") || !root.hasNonNull("documentTypeValid")
+            if (root == null || !root.has("valid") || !root.hasNonNull("documentTypeValid")
                     || !root.hasNonNull("candidateNameValid") || !root.hasNonNull("confidence")
                     || !root.hasNonNull("reason")
                     || !"1".equals(root.path("version").asText("1"))) {
@@ -80,10 +93,19 @@ public class PythonDocIntelClient implements DocIntelClient {
                 return Optional.empty();
             }
             ok();
+            // `valid` is a JSON boolean in the Python contract — parse tolerantly
+            // (boolean or "true"/"valid" strings) so contract drift degrades loudly, not silently.
+            JsonNode validNode = root.path("valid");
+            boolean valid = validNode.isBoolean() ? validNode.asBoolean(false)
+                    : "true".equalsIgnoreCase(validNode.asText("")) || "valid".equalsIgnoreCase(validNode.asText(""));
             return Optional.of(new DocIntelClient.DocumentValidation(
-                    root.path("valid").asText(), root.path("documentTypeValid").asBoolean(),
+                    valid, root.path("documentTypeValid").asBoolean(),
                     root.path("candidateNameValid").asBoolean(), root.path("confidence").asDouble(),
                     root.path("reason").asText()));
+        } catch (tn.steg.backend.common.domain.exception.BusinessRuleException bre) {
+            // Client errors from Python (413/422 invalid document, 401 token misconfig):
+            // deterministic, NOT a service outage — propagate without tripping the circuit.
+            throw bre;
         } catch (Exception ex) {
             fail("validateDocument", ex);
             return Optional.empty();
@@ -172,6 +194,19 @@ public class PythonDocIntelClient implements DocIntelClient {
                     throw new IllegalStateException("empty response");
                 }
                 return objectMapper.readTree(response);
+            } catch (HttpStatusCodeException httpEx) {
+                int status = httpEx.getStatusCode().value();
+                if (isDeterministicClientError(status)) {
+                    // 400/401/403/404/413/422: deterministic client or config error,
+                    // retrying the identical payload can never succeed — fail fast
+                    // without burning retry budget or tripping the outage circuit.
+                    throw mapDeterministicError(status, httpEx);
+                }
+                // 408/429/5xx: transient — retry with backoff, then let fail() count it.
+                last = httpEx;
+                if (i < attempts) {
+                    Thread.sleep(300L * (1L << (i - 1)));
+                }
             } catch (Exception ex) {
                 last = ex;
                 if (i < attempts) {
@@ -182,12 +217,60 @@ public class PythonDocIntelClient implements DocIntelClient {
         throw last != null ? last : new IllegalStateException("python call failed");
     }
 
+    /**
+     * Deterministic 4xx from Python that must NOT count as a service outage:
+     * invalid payload, auth misconfiguration, oversized or unparsable PDF.
+     * 408/429 are transient (timeout/rate-limit) and DO count toward the circuit.
+     */
+    private boolean isDeterministicClientError(int status) {
+        return (status >= 400 && status < 500) && status != 408 && status != 429;
+    }
+
+    /**
+     * Map Python 4xx to precise business codes so callers surface a truthful
+     * message (replace the file) instead of a false "service unavailable".
+     */
+    private tn.steg.backend.common.domain.exception.BusinessRuleException mapDeterministicError(
+            int status, HttpStatusCodeException httpEx) {
+        String detail = null;
+        try {
+            JsonNode err = objectMapper.readTree(httpEx.getResponseBodyAsString());
+            detail = err.path("error").asText(null);
+        } catch (Exception ignored) {
+            // fall through to generic messages below
+        }
+        return switch (status) {
+            case 401 -> {
+                log.error("Python AI auth rejected (401): service token mismatch or empty. "
+                        + "Check PYTHON_AI_SERVICE_TOKEN sync between backend and ai-services. Not tripping circuit.");
+                yield new tn.steg.backend.common.domain.exception.BusinessRuleException("AI_UNAVAILABLE",
+                        "Document validation service is not configured.");
+            }
+            case 413 -> new tn.steg.backend.common.domain.exception.BusinessRuleException("FILE_TOO_LARGE",
+                    "Document exceeds the AI analysis size limit" + (detail != null ? ": " + detail : ".")
+                            + " Please upload a smaller PDF.");
+            case 422 -> new tn.steg.backend.common.domain.exception.BusinessRuleException("INVALID_DOCUMENT",
+                    detail != null && !detail.isBlank() ? detail
+                            : "Document could not be analysed (not a valid PDF). Please replace the file.");
+            default -> new tn.steg.backend.common.domain.exception.BusinessRuleException("INVALID_DOCUMENT",
+                    "Document rejected by the analysis service (status " + status + "). Please replace the file.");
+        };
+    }
+
     private void ok() {
         consecutiveFailures.set(0);
+        lastFailureMillis = 0;
     }
 
     private void fail(String op, Exception ex) {
+        // Defensive: 4xx that slipped through post() must never open the outage circuit.
+        if (ex instanceof HttpStatusCodeException h && isDeterministicClientError(h.getStatusCode().value())) {
+            log.debug("Python AI deterministic client error on {}: status={} (circuit untouched)",
+                    op, h.getStatusCode().value());
+            return;
+        }
         int n = consecutiveFailures.incrementAndGet();
+        lastFailureMillis = System.currentTimeMillis();
         String status = (ex instanceof HttpStatusCodeException h) ? String.valueOf(h.getStatusCode().value()) : "n/a";
         log.warn("Python AI call degraded: op={} errorClass={} httpStatus={} failures={}", op,
                 ex.getClass().getSimpleName(), status, n);

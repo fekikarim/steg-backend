@@ -39,11 +39,19 @@ public class NotificationEventListener {
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onApplicationSubmitted(ApplicationSubmittedEvent event) {
-        // E2 step 10: submission confirmation (HIGH → email when enabled + opt-in).
+        // Submission confirmation — professional French, STEG-branded, status + next steps, no sensitive data.
+        // HIGH priority → IN_APP always + EMAIL when steg.notifications.mail.enabled + opt-in.
+        // Email body is wrapped by MailTemplateService.generic (STEG layout) in NotificationService.
         notificationService.dispatch(
-                "Application received",
-                "Your internship application " + event.applicationReference() + " has been received. "
-                        + "You can track its progress from your candidate space.",
+                "Candidature soumise — En attente de validation",
+                "Votre candidature " + event.applicationReference()
+                        + " a bien été soumise avec succès et est maintenant en attente de validation par le superviseur responsable.\n\n"
+                        + "Statut actuel : En attente de validation\n"
+                        + "Référence à conserver : " + event.applicationReference() + "\n\n"
+                        + "Prochaines étapes :\n"
+                        + "- Votre dossier sera examiné par le superviseur du département concerné\n"
+                        + "- Vous recevrez une notification par e-mail et dans votre espace candidat dès qu'une décision sera prise\n"
+                        + "- Vous pouvez suivre l'avancement à tout moment depuis votre espace candidat",
                 NotificationPriority.HIGH,
                 "InternshipApplication", event.applicationId(),
                 List.of(event.candidateUserId()), event.actorId());

@@ -8,7 +8,7 @@ import java.util.Optional;
  */
 public interface DocIntelClient {
 
-    record DocumentValidation(String valid, boolean documentTypeValid, boolean candidateNameValid,
+    record DocumentValidation(boolean valid, boolean documentTypeValid, boolean candidateNameValid,
             double confidence, String reason) {}
 
     record ReportAnalysis(double relevanceScore, String detectedStegContent,

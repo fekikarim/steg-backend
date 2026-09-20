@@ -437,9 +437,7 @@ public class DocumentService {
             throw new BusinessRuleException("AI_UNAVAILABLE", "Document validation did not return a result — please retry.");
         }
         var v = result.get();
-        boolean validBool = "true".equalsIgnoreCase(v.valid()) || "valid".equalsIgnoreCase(v.valid());
-        // Python returns valid as string "true"/"false" via root.path("valid").asText() – handle both.
-        // Fall back to computed field when string parsing is ambiguous.
+        boolean validBool = v.valid();
         // The advisory `valid` is authoritative from Python (type && name).
         auditService.log("DOCUMENT_AI_VALIDATED", "Document", documentId, null,
                 "valid=" + validBool + ",typeValid=" + v.documentTypeValid()
@@ -475,7 +473,7 @@ public class DocumentService {
             throw new BusinessRuleException("AI_UNAVAILABLE", "Document validation did not return a result — please retry.");
         }
         var v = result.get();
-        boolean validBool = "true".equalsIgnoreCase(v.valid()) || "valid".equalsIgnoreCase(v.valid());
+        boolean validBool = v.valid();
         log.info("Public AI validation (type {}): valid={} confidence={}", type, validBool, v.confidence());
         return new tn.steg.backend.document.application.dto.DocumentAiValidationResponse(
                 null, validBool, v.documentTypeValid(), v.candidateNameValid(),

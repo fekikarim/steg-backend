@@ -1,6 +1,5 @@
 package tn.steg.backend.notification.application;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
@@ -26,6 +25,7 @@ import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.notification.domain.repository.NotificationDeliveryRepository;
 import tn.steg.backend.notification.domain.repository.NotificationRepository;
 
+import jakarta.annotation.PreDestroy;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -34,26 +34,32 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Application service for the Notification module (A10).
+ * Application service for the Notification module (A10) — Resend edition.
  *
  * <p>Fan-out model: one {@link Notification} per business fact, one
  * {@link NotificationDelivery} per recipient per channel. Channel selection:
- * IN_APP always; EMAIL for HIGH/URGENT priorities when SMTP is enabled and the
- * recipient opted in; PUSH for URGENT only (no-op stub until FCM/APNs lands).
+ * IN_APP always; EMAIL for HIGH/URGENT priorities when Resend is enabled
+ * (steg.notifications.mail.enabled + steg.notifications.resend.api-key) and
+ * the recipient opted in; PUSH for URGENT only.
  *
- * <p>No paid external notification SaaS is used: email goes through
- * {@code JavaMailSender} (configurable SMTP, e.g. a free/dev provider) and
- * in-app through the persisted delivery plus the Phase A9 STOMP broker.
+ * <p>Email goes through Resend REST API (https://api.resend.com/emails) — backend-only,
+ * API key never leaves the server. In-app through the persisted delivery plus Phase A9 STOMP broker.
  *
  * <p>Failures are recorded with a reason and retried with bounded exponential
  * backoff ({@code retryFailedDeliveries}, driven by a {@code @Scheduled} sweep);
  * rows that exhaust attempts stay FAILED — visible, never silently dropped.
+ * Email failure never rolls back the business transaction (e.g. application remains SUBMITTED).
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class NotificationService {
 
     private static final int RETRY_BATCH_SIZE = 100;
@@ -77,6 +83,51 @@ public class NotificationService {
 
     @Value("${steg.notifications.retry.max-backoff-seconds:3600}")
     private long maxBackoffSeconds;
+
+    /**
+     * Hard wall-clock budget for one EMAIL send inside a request transaction.
+     * Socket timeouts alone cannot be trusted to bound third-party latency
+     * (stalled TLS/proxy can outlive them), and the send runs BEFORE_COMMIT on
+     * submit — every extra second delays the candidate's HTTP response.
+     * {@code Future.get} is JVM-side and always honored: the request thread
+     * never waits longer than this, no matter how pathological the network.
+     * Failures (including timeouts) mark the delivery FAILED with backoff and
+     * the @Scheduled sweep retries them asynchronously — email never blocks
+     * or rolls back the business transaction.
+     */
+    private static final long EMAIL_SEND_BUDGET_SECONDS = 8;
+
+    private final ExecutorService emailExecutor;
+    private static final AtomicInteger EMAIL_THREAD_SEQ = new AtomicInteger();
+
+    public NotificationService(NotificationRepository notificationRepository,
+                               NotificationDeliveryRepository deliveryRepository,
+                               UserRepository userRepository,
+                               EmailSender emailSender,
+                               PushNotificationSender pushSender,
+                               RealtimeNotifier realtimeNotifier,
+                               AuditService auditService) {
+        this.notificationRepository = notificationRepository;
+        this.deliveryRepository = deliveryRepository;
+        this.userRepository = userRepository;
+        this.emailSender = emailSender;
+        this.pushSender = pushSender;
+        this.realtimeNotifier = realtimeNotifier;
+        this.auditService = auditService;
+        // Cached daemon pool: tasks complete in ~1-2s when Resend is healthy;
+        // stuck tasks (dead network) hold a thread until the socket dies, but
+        // never the request thread (see EMAIL_SEND_BUDGET_SECONDS).
+        this.emailExecutor = Executors.newCachedThreadPool(r -> {
+            Thread t = new Thread(r, "email-send-" + EMAIL_THREAD_SEQ.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    @PreDestroy
+    void shutdownEmailExecutor() {
+        emailExecutor.shutdownNow();
+    }
 
 
     // -------------------------------------------------------------------------
@@ -121,7 +172,7 @@ public class NotificationService {
 
     /**
      * Pure channel-selection rule (unit-tested):
-     * IN_APP always; EMAIL for HIGH/URGENT when SMTP is enabled and the user
+     * IN_APP always; EMAIL for HIGH/URGENT when Resend is enabled and the user
      * opted in; PUSH for URGENT only.
      */
     static Set<NotificationChannel> resolveChannels(NotificationPriority priority,
@@ -148,7 +199,7 @@ public class NotificationService {
                     pushBestEffort(delivery, recipient);
                 }
                 case EMAIL -> {
-                    emailSender.send(recipient.getEmail(),
+                    sendEmailBounded(recipient.getEmail(),
                             delivery.getNotification().getTitle(),
                             delivery.getNotification().getMessage());
                     delivery.setStatus(NotificationDeliveryStatus.SENT);
@@ -180,6 +231,37 @@ public class NotificationService {
                                 "reason", String.valueOf(delivery.getFailureReason())),
                         null, null);
             }
+        }
+    }
+
+    /**
+     * EMAIL send with a hard wall-clock budget (see EMAIL_SEND_BUDGET_SECONDS).
+     * The sender itself is stateless and thread-safe (RestClient + ObjectMapper),
+     * so running it off the request thread needs no transaction context.
+     * Timeout/interruption → EmailDeliveryException → caller marks FAILED with
+     * backoff; the sweep retries asynchronously. Never blocks the request past
+     * the budget, never rolls back business state.
+     */
+    private void sendEmailBounded(String to, String subject, String body) {
+        Future<?> future = emailExecutor.submit(() -> emailSender.send(to, subject, body));
+        try {
+            future.get(EMAIL_SEND_BUDGET_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException te) {
+            future.cancel(true);
+            throw new tn.steg.backend.notification.infrastructure.mail.ResendEmailSender.EmailDeliveryException(
+                    "Email delivery timed out after " + EMAIL_SEND_BUDGET_SECONDS + "s", te);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            future.cancel(true);
+            throw new tn.steg.backend.notification.infrastructure.mail.ResendEmailSender.EmailDeliveryException(
+                    "Email delivery interrupted", ie);
+        } catch (java.util.concurrent.ExecutionException ee) {
+            Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+            if (cause instanceof RuntimeException re) {
+                throw re;
+            }
+            throw new tn.steg.backend.notification.infrastructure.mail.ResendEmailSender.EmailDeliveryException(
+                    "Email delivery failed", cause);
         }
     }
 

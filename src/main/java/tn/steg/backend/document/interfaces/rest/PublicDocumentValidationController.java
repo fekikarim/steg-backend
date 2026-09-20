@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import tn.steg.backend.common.domain.annotation.RateLimited;
+import tn.steg.backend.common.interfaces.rest.PublicEndpoint;
 import tn.steg.backend.document.application.DocumentService;
 import tn.steg.backend.document.application.dto.DocumentAiValidationResponse;
 
@@ -26,6 +27,7 @@ public class PublicDocumentValidationController {
 
     private final DocumentService documentService;
 
+    @PublicEndpoint
     @PostMapping(value = "/api/public/documents/validation", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @RateLimited(name = "public-doc-validation", limit = 20, windowSeconds = 60)
     @Operation(summary = "Public AI validation (anonymous wizard gate)",

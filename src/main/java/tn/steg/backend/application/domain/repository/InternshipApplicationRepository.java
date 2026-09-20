@@ -19,7 +19,10 @@ public interface InternshipApplicationRepository {
     List<InternshipApplication> findByCandidateId(UUID candidateId);
     Optional<InternshipApplication> findByIdAndCandidateUserId(UUID id, UUID userId);
     boolean existsByCandidateId(UUID candidateId);
+    boolean existsByCandidateIdAndStatusNot(UUID candidateId, tn.steg.backend.application.domain.model.ApplicationStatus status);
     Optional<InternshipApplication> findByTrackingTokenHash(String trackingTokenHash);
     long countByReferencePrefix(String prefix);
+    @org.springframework.data.jpa.repository.Query(value = "SELECT reference FROM internship_applications WHERE reference LIKE :prefix || '%' ORDER BY reference DESC LIMIT 1", nativeQuery = true)
+    Optional<String> findTopReferenceByPrefix(@org.springframework.data.repository.query.Param("prefix") String prefix);
     InternshipApplication save(InternshipApplication application);
 }

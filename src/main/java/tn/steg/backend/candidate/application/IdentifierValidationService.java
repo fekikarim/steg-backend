@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tn.steg.backend.candidate.application.dto.IdentifierValidationRequest;
 import tn.steg.backend.candidate.application.dto.IdentifierValidationResponse;
+import tn.steg.backend.application.domain.model.ApplicationStatus;
 import tn.steg.backend.candidate.domain.model.Candidate;
 import tn.steg.backend.candidate.domain.repository.CandidateRepository;
 import tn.steg.backend.candidate.domain.service.NationalIdHasher;
@@ -125,7 +126,8 @@ public class IdentifierValidationService {
 
     private boolean hasExistingApplication(Candidate candidate) {
         try {
-            return applicationRepository.existsByCandidateId(candidate.getId());
+            // Withdrawn applications do not block new submissions — identifiers are released
+            return applicationRepository.existsByCandidateIdAndStatusNot(candidate.getId(), ApplicationStatus.WITHDRAWN);
         } catch (Exception e) {
             log.warn("Failed to check existing application for candidate {}: {}", candidate.getId(), e.getMessage());
             return false;

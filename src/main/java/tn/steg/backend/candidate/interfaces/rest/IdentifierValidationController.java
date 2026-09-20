@@ -13,6 +13,7 @@ import tn.steg.backend.candidate.application.IdentifierValidationService;
 import tn.steg.backend.candidate.application.dto.IdentifierValidationRequest;
 import tn.steg.backend.candidate.application.dto.IdentifierValidationResponse;
 import tn.steg.backend.common.domain.annotation.RateLimited;
+import tn.steg.backend.common.interfaces.rest.PublicEndpoint;
 
 @RestController
 @RequestMapping("/api/public/applications")
@@ -22,6 +23,7 @@ public class IdentifierValidationController {
 
     private final IdentifierValidationService validationService;
 
+    @PublicEndpoint
     @PostMapping("/validate-identifiers")
     @RateLimited(name = "identifier-validation", limit = 10, windowSeconds = 60)
     @Operation(

@@ -27,8 +27,9 @@ import tn.steg.backend.audit.application.AuditService;
 import java.time.LocalDate;
 import java.time.Year;
 import java.util.List;
-import java.util.UUID;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Application service for the InternshipApplication lifecycle.
@@ -91,24 +92,42 @@ public class ApplicationService {
     @Transactional
     public ApplicationResponse createApplication(ApplicationCreateRequest request, UserPrincipal actor) {
         Candidate candidate = findCandidateByUserOrThrow(actor.getId());
-        if (applicationRepository.existsByCandidateId(candidate.getId())) {
+        if (applicationRepository.existsByCandidateIdAndStatusNot(candidate.getId(), ApplicationStatus.WITHDRAWN)) {
             throw new BusinessRuleException("APPLICATION_ALREADY_EXISTS",
-                    "A candidate can only have one application. Please wait until the next session.");
+                    "A candidate can only have one active application. Please wait until the next session or withdraw your current application to create a new one.");
         }
-        String reference = generateReference();
-
-        InternshipApplication application = new InternshipApplication(
-                reference, candidate, ApplicationStatus.DRAFT);
-        application.setDesiredStartDate(request.desiredStartDate());
-        application.setDesiredEndDate(request.desiredEndDate());
-        application.setSubmittedOnline(request.submittedOnline() != null ? request.submittedOnline() : true);
-        refreshDerivedClassification(application);
-
-        application = applicationRepository.save(application);
-        log.info("Application created: ref={} by candidate={}", reference, candidate.getId());
-        auditService.log("APPLICATION_CREATED", "InternshipApplication", application.getId(), null,
-                Map.of("reference", reference, "status", ApplicationStatus.DRAFT.toString()), actor.getId(), null);
-        return ApplicationResponse.from(application);
+        // Retry on duplicate reference (concurrent creation or gaps after WITHDRAWN)
+        // Validate date range before persisting (chronology check)
+        if (request.desiredStartDate() != null && request.desiredEndDate() != null
+                && request.desiredEndDate().isBefore(request.desiredStartDate())) {
+            throw new BusinessRuleException("INVALID_DATE_RANGE",
+                    "End date cannot be before start date.");
+        }
+        for (int attempt = 0; attempt < 3; attempt++) {
+            String reference = generateReference();
+            InternshipApplication application = new InternshipApplication(
+                    reference, candidate, ApplicationStatus.DRAFT);
+            application.setDesiredStartDate(request.desiredStartDate());
+            application.setDesiredEndDate(request.desiredEndDate());
+            application.setSubmittedOnline(request.submittedOnline() != null ? request.submittedOnline() : true);
+            refreshDerivedClassification(application);
+            try {
+                application = applicationRepository.save(application);
+                log.info("Application created: ref={} by candidate={} (attempt {})", reference, candidate.getId(), attempt + 1);
+                auditService.log("APPLICATION_CREATED", "InternshipApplication", application.getId(), null,
+                        Map.of("reference", reference, "status", ApplicationStatus.DRAFT.toString()), actor.getId(), null);
+                return ApplicationResponse.from(application);
+            } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+                if (ex.getMessage() != null && ex.getMessage().contains("internship_applications_reference_key") && attempt < 2) {
+                    log.warn("Duplicate reference {} on attempt {}, retrying with next sequence", reference, attempt + 1);
+                    // Brief backoff before retry to reduce contention
+                    try { Thread.sleep(50L * (attempt + 1)); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    continue;
+                }
+                throw ex;
+            }
+        }
+        throw new BusinessRuleException("REFERENCE_GENERATION_FAILED", "Failed to generate unique application reference after retries.");
     }
 
     /**
@@ -154,6 +173,12 @@ public class ApplicationService {
                     "Only DRAFT applications can be edited. Current status: " + application.getStatus());
         }
 
+        if (request.desiredStartDate() != null && request.desiredEndDate() != null
+                && request.desiredEndDate().isBefore(request.desiredStartDate())) {
+            throw new BusinessRuleException("INVALID_DATE_RANGE",
+                    "End date cannot be before start date.");
+        }
+
         application.setDesiredStartDate(request.desiredStartDate());
         application.setDesiredEndDate(request.desiredEndDate());
         if (request.submittedOnline() != null) {
@@ -190,6 +215,16 @@ public class ApplicationService {
 
     private ApplicationResponse doSubmitApplication(UUID id, UserPrincipal actor) {
         InternshipApplication application = resolveOwnCandidateApplicationOrThrow(id, actor);
+
+        // Idempotent replay without a key: a retry after a frontend timeout finds
+        // the already-committed SUBMITTED state and returns it instead of failing
+        // the transition — no duplicate workflow instance, no duplicate event.
+        // (Status change + workflow spawn commit atomically, so SUBMITTED always
+        // implies the workflow exists.)
+        if (application.getStatus() == ApplicationStatus.SUBMITTED) {
+            log.info("Application already SUBMITTED (replay): ref={}", application.getReference());
+            return ApplicationResponse.from(application);
+        }
 
         validateTransition(application, ApplicationStatus.DRAFT, ApplicationStatus.SUBMITTED);
 
@@ -297,9 +332,23 @@ public class ApplicationService {
 
     /**
      * Generates a server-side reference in format {@code APP-YYYY-NNNNN}.
+     * Uses MAX(reference) rather than COUNT to handle gaps (e.g. after WITHDRAWN reuse)
+     * and to be more resilient to concurrent inserts.
      */
-    private String generateReference() {        int year = Year.now().getValue();
+    private String generateReference() {
+        int year = Year.now().getValue();
         String prefix = "APP-" + year + "-";
+        Optional<String> maxRefOpt = applicationRepository.findTopReferenceByPrefix(prefix);
+        if (maxRefOpt.isPresent()) {
+            String maxRef = maxRefOpt.get();
+            try {
+                String numPart = maxRef.substring(prefix.length());
+                int nextNum = Integer.parseInt(numPart) + 1;
+                return String.format("%s%05d", prefix, nextNum);
+            } catch (Exception e) {
+                log.warn("Failed to parse max reference {}: {}", maxRef, e.getMessage());
+            }
+        }
         long count = applicationRepository.countByReferencePrefix(prefix);
         return String.format("%s%05d", prefix, count + 1);
     }

@@ -28,23 +28,12 @@ spring:
     baseline-version: 0
     locations: classpath:db/migration
 
-  # Transactional email transport (used only when notifications.mail.enabled=true).
+  # Resend transactional email (used only when notifications.mail.enabled=true).
   # Credentials come exclusively from environment/secret management and are
-  # never logged (the startup validator below only checks presence/shape).
-  mail:
-    host: ${SMTP_HOST:localhost}
-    port: ${SMTP_PORT:1025}
-    username: ${SMTP_USERNAME:}
-    password: ${SMTP_PASSWORD:}
-    properties:
-      mail:
-        smtp:
-          auth: ${SMTP_AUTH:false}
-          starttls:
-            enable: ${SMTP_STARTTLS:false}
-          connectiontimeout: ${SMTP_CONNECTION_TIMEOUT_MILLIS:5000}
-          timeout: ${SMTP_READ_TIMEOUT_MILLIS:10000}
-          writetimeout: ${SMTP_WRITE_TIMEOUT_MILLIS:10000}
+  # never logged (the startup validator only checks presence/shape).
+  # No SMTP — Resend REST API (https://api.resend.com/emails) is used.
+  resend:
+    api-key: ${RESEND_API_KEY:}
 
   # Multipart upload ceiling. This is a coarse transport guard only: the
   # authoritative per-DocumentType caps live in DocumentValidationService
@@ -80,10 +69,8 @@ management:
       # are never emitted.
       show-components: when_authorized
   health:
-    # SMTP connectivity is NOT a serving-readiness dependency of this API
-    # (mailing is fire-and-forget with its own failure handling). Without a
-    # reachable SMTP relay in dev, the ungrouped mail contributor would pull
-    # the whole /actuator/health aggregate to DOWN.
+    # Resend connectivity is NOT a serving-readiness dependency of this API
+    # (mailing is fire-and-forget with its own failure handling).
     mail:
       enabled: false
   prometheus:
@@ -144,10 +131,12 @@ steg:
       completed-intern-access: ${GROUPS_COMPLETED_INTERN_ACCESS:retain}
   notifications:
     mail:
-      # Built-in email only (JavaMailSender over SMTP, e.g. a free/dev provider).
-      # No external notification SaaS. EMAIL deliveries are created only when true.
+      # Resend transactional email only. EMAIL deliveries are created only when true.
       enabled: ${NOTIFICATIONS_MAIL_ENABLED:false}
       from: ${NOTIFICATIONS_MAIL_FROM:no-reply@steg.tn}
+    resend:
+      api-key: ${RESEND_API_KEY:}
+      timeout-millis: ${RESEND_TIMEOUT_MILLIS:10000}
     retry:
       fixed-delay-millis: ${NOTIFICATIONS_RETRY_DELAY_MILLIS:60000}
       max-attempts: ${NOTIFICATIONS_RETRY_MAX_ATTEMPTS:5}

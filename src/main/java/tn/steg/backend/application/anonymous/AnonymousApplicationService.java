@@ -65,7 +65,8 @@ public class AnonymousApplicationService {
             Candidate existing = candidateRepository.findByNationalIdHash(nationalIdHash)
                     .orElseThrow(() -> new ResourceNotFoundException("Candidate not found"));
             List<InternshipApplication> apps = applicationRepository.findByCandidateId(existing.getId());
-            if (!apps.isEmpty()) {
+            boolean hasActive = apps.stream().anyMatch(a -> a.getStatus() != tn.steg.backend.application.domain.model.ApplicationStatus.WITHDRAWN);
+            if (hasActive) {
                 throw new BusinessRuleException("APPLICATION_ALREADY_EXISTS_FOR_CIN",
                         "A candidate with this national ID already has a submitted application.");
             }

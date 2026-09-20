@@ -82,7 +82,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @ActiveProfiles("test")
 @Import(TestcontainersConfiguration.class)
-@TestPropertySource(properties = "steg.notifications.mail.enabled=true")
+@TestPropertySource(properties = {"steg.notifications.mail.enabled=true", "steg.notifications.resend.api-key=re_test_dummy_key_for_integration_tests"})
 @DisplayName("Notification Module Integration Tests (A10)")
 class NotificationIntegrationTest {
 

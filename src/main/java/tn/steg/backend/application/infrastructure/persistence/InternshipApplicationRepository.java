@@ -38,6 +38,8 @@ public interface InternshipApplicationRepository extends JpaRepository<Internshi
             @Param("id") UUID id,
             @Param("userId") UUID userId);
 
+    boolean existsByCandidateIdAndStatusNot(UUID candidateId, tn.steg.backend.application.domain.model.ApplicationStatus status);
+
     /**
      * Count existing applications whose reference starts with the year prefix
      * (e.g. "APP-2025-") to derive the next sequence number.
