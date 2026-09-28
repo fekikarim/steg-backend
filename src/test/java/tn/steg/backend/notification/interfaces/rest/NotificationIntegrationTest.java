@@ -41,9 +41,11 @@ import tn.steg.backend.internship.domain.model.Internship;
 import tn.steg.backend.internship.infrastructure.persistence.InternshipRepository;
 import tn.steg.backend.notification.application.NotificationService;
 import tn.steg.backend.notification.application.port.out.EmailSender;
+import tn.steg.backend.notification.domain.model.Notification;
 import tn.steg.backend.notification.domain.model.NotificationChannel;
 import tn.steg.backend.notification.domain.model.NotificationDelivery;
 import tn.steg.backend.notification.domain.model.NotificationDeliveryStatus;
+import tn.steg.backend.notification.domain.model.NotificationPriority;
 import tn.steg.backend.notification.domain.repository.NotificationDeliveryRepository;
 import tn.steg.backend.organization.domain.model.Department;
 import tn.steg.backend.organization.domain.model.Employee;
@@ -247,6 +249,29 @@ class NotificationIntegrationTest {
                 .containsExactlyInAnyOrder(NotificationChannel.IN_APP, NotificationChannel.EMAIL);
         assertThat(deliveries).allMatch(d -> d.getStatus() == NotificationDeliveryStatus.SENT);
         assertThat(fakeMail.sent).anyMatch(m -> m.to().equals(candidateUser.getEmail()));
+    }
+
+    @Test
+    @DisplayName("dispatchOnce is exactly-once: redispatch reuses the row and never resends email")
+    void dispatchOnceIsExactlyOnce() {
+        String tag = suffix();
+        User candidateUser = newUser("exact_" + tag + "@steg.com");
+        UUID appId = UUID.randomUUID();
+        String key = "APP_SUBMITTED:" + appId;
+
+        Notification first = notificationService.dispatchOnce(key, "Submitted", "body",
+                NotificationPriority.HIGH, "InternshipApplication", appId,
+                List.of(candidateUser.getId()), candidateUser.getId());
+        Notification second = notificationService.dispatchOnce(key, "Submitted", "body",
+                NotificationPriority.HIGH, "InternshipApplication", appId,
+                List.of(candidateUser.getId()), candidateUser.getId());
+
+        // Same row reused — no duplicate notification, no duplicate deliveries.
+        assertThat(second.getId()).isEqualTo(first.getId());
+        assertThat(deliveriesFor(first.getId())).hasSize(2); // IN_APP + EMAIL, created once
+        // Exactly one email for the logical event, despite two dispatches.
+        assertThat(fakeMail.sent.stream().filter(m -> m.to().equals(candidateUser.getEmail())).count())
+                .isEqualTo(1);
     }
 
     @Test

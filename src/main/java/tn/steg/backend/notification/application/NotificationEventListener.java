@@ -42,7 +42,11 @@ public class NotificationEventListener {
         // Submission confirmation — professional French, STEG-branded, status + next steps, no sensitive data.
         // HIGH priority → IN_APP always + EMAIL when steg.notifications.mail.enabled + opt-in.
         // Email body is wrapped by MailTemplateService.generic (STEG layout) in NotificationService.
-        notificationService.dispatch(
+        // Exactly-once: keyed by application — retries, refreshes, duplicate
+        // clicks, timeout recovery, or event reprocessing reuse the existing
+        // notification instead of sending a second confirmation email.
+        notificationService.dispatchOnce(
+                "APP_SUBMITTED:" + event.applicationId(),
                 "Candidature soumise — En attente de validation",
                 "Votre candidature " + event.applicationReference()
                         + " a bien été soumise avec succès et est maintenant en attente de validation par le superviseur responsable.\n\n"

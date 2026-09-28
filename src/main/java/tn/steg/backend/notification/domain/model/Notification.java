@@ -35,6 +35,16 @@ public class Notification extends BaseEntity {
     @Column(name = "related_entity_id")
     private UUID relatedEntityId;
 
+    /**
+     * Optional idempotency key (e.g. {@code APP_SUBMITTED:<applicationId>}).
+     * Enforced unique by {@code uq_notifications_dedupe_key}; NULL means
+     * "not deduped" (NULLs never collide in PostgreSQL). Guards exactly-once
+     * confirmation emails across retries, refreshes, duplicate clicks,
+     * timeout recovery, and event reprocessing.
+     */
+    @Column(name = "dedupe_key", length = 128, unique = true)
+    private String dedupeKey;
+
     public Notification(String title, String message, NotificationPriority priority) {
         this.title = title;
         this.message = message;

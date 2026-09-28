@@ -57,28 +57,46 @@ public class ResendEmailSender implements EmailSender {
 
     @Override
     public void send(String to, String subject, String body) {
+        send(to, subject, body, null);
+    }
+
+    /**
+     * Sends via Resend with an {@code Idempotency-Key} header when provided.
+     * Resend dedupes same-key POSTs server-side, so a sweep retry after an
+     * ambiguous failure (sent-but-response-lost, e.g. our 8s budget firing
+     * while Resend was still processing) cannot produce a second email.
+     */
+    @Override
+    public void send(String to, String subject, String body, String idempotencyKey) {
         MailTemplateService.Mail mail = templates.generic(subject, body);
-        sendInternal(to, mail);
+        sendInternal(to, mail, idempotencyKey);
     }
 
     /** Event-specific branded HTML mail (used by listeners for key workflow events). */
     public void sendTemplated(String to, MailTemplateService.Mail mail) {
-        sendInternal(to, mail);
+        sendInternal(to, mail, null);
     }
 
     private record ResendPayload(String from, List<String> to, String subject, String html) {}
 
-    private void sendInternal(String to, MailTemplateService.Mail mail) {
+    private void sendInternal(String to, MailTemplateService.Mail mail, String idempotencyKey) {
         if (apiKey == null || apiKey.isBlank()) {
             log.error("Resend API key is blank — cannot send email to {}", maskRecipient(to));
             throw new EmailDeliveryException("Email delivery failed: Resend not configured", null);
         }
         try {
             String payload = objectMapper.writeValueAsString(new ResendPayload(from, List.of(to), mail.subject(), mail.html()));
-            // Resend expects Authorization: Bearer re_... and Content-Type: application/json
-            String response = resendClient.post()
+            // Resend expects Authorization: Bearer re_... and Content-Type: application/json.
+            // Idempotency-Key makes retries of the same logical email safe:
+            // same key → at most one delivery, even if an earlier attempt's
+            // response was lost (timeout) after the send went through.
+            var request = resendClient.post()
                     .uri("/emails")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey);
+            if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+                request = request.header("Idempotency-Key", idempotencyKey.strip());
+            }
+            String response = request
                     .body(payload)
                     .retrieve()
                     .body(String.class);

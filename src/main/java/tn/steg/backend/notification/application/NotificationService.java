@@ -32,6 +32,7 @@ import java.util.Collection;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -143,9 +144,40 @@ public class NotificationService {
     public Notification dispatch(String title, String message, NotificationPriority priority,
                                  String relatedEntityType, UUID relatedEntityId,
                                  Collection<UUID> recipientIds, UUID actorId) {
+        return dispatchOnce(null, title, message, priority, relatedEntityType, relatedEntityId,
+                recipientIds, actorId);
+    }
+
+    /**
+     * Exactly-once dispatch for confirmations that must be sent one time per
+     * business event (e.g. one application-submission email per application).
+     *
+     * <p>If a notification with {@code dedupeKey} already exists (retry, page
+     * refresh, duplicate click, timeout recovery, event reprocessing), the
+     * existing row is returned untouched — no new notification, no new
+     * delivery rows, no second email. Otherwise the notification is created
+     * with the key; the DB unique index ({@code uq_notifications_dedupe_key})
+     * is the backstop against true-concurrent duplicates.
+     */
+    @Transactional
+    public Notification dispatchOnce(String dedupeKey, String title, String message,
+                                     NotificationPriority priority,
+                                     String relatedEntityType, UUID relatedEntityId,
+                                     Collection<UUID> recipientIds, UUID actorId) {
+        if (dedupeKey != null && !dedupeKey.isBlank()) {
+            Optional<Notification> existing = notificationRepository.findByDedupeKey(dedupeKey.strip());
+            if (existing.isPresent()) {
+                log.info("Notification dedupe hit: key={} existingId={} — skipping duplicate fan-out",
+                        dedupeKey, existing.get().getId());
+                return existing.get();
+            }
+        }
         Notification notification = new Notification(title, message, priority);
         notification.setRelatedEntityType(relatedEntityType);
         notification.setRelatedEntityId(relatedEntityId);
+        if (dedupeKey != null && !dedupeKey.isBlank()) {
+            notification.setDedupeKey(dedupeKey.strip());
+        }
         notification = notificationRepository.save(notification);
 
         List<NotificationDelivery> deliveries = new ArrayList<>();
@@ -199,9 +231,18 @@ public class NotificationService {
                     pushBestEffort(delivery, recipient);
                 }
                 case EMAIL -> {
+                    // Stable per-notification key: the initial attempt and every
+                    // sweep retry of this delivery carry the same key, so the
+                    // provider dedupes a retry whose original send actually
+                    // went through but whose response was lost (timeout).
+                    String idempotencyKey = delivery.getNotification() != null
+                            && delivery.getNotification().getId() != null
+                            ? "steg-email-" + delivery.getNotification().getId()
+                            : null;
                     sendEmailBounded(recipient.getEmail(),
                             delivery.getNotification().getTitle(),
-                            delivery.getNotification().getMessage());
+                            delivery.getNotification().getMessage(),
+                            idempotencyKey);
                     delivery.setStatus(NotificationDeliveryStatus.SENT);
                     delivery.setSentAt(Instant.now());
                 }
@@ -242,8 +283,8 @@ public class NotificationService {
      * backoff; the sweep retries asynchronously. Never blocks the request past
      * the budget, never rolls back business state.
      */
-    private void sendEmailBounded(String to, String subject, String body) {
-        Future<?> future = emailExecutor.submit(() -> emailSender.send(to, subject, body));
+    private void sendEmailBounded(String to, String subject, String body, String idempotencyKey) {
+        Future<?> future = emailExecutor.submit(() -> emailSender.send(to, subject, body, idempotencyKey));
         try {
             future.get(EMAIL_SEND_BUDGET_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException te) {
