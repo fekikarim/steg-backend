@@ -41,6 +41,10 @@ public class JwtService implements TokenServicePort {
     }
 
     public String generateAccessToken(UUID userId, String email, List<String> roles) {
+        return generateAccessToken(userId, email, roles, false);
+    }
+
+    public String generateAccessToken(UUID userId, String email, List<String> roles, boolean mustChangePassword) {
         Instant now = Instant.now();
         Instant expiration = now.plus(accessTokenExpirationMinutes, ChronoUnit.MINUTES);
 
@@ -52,6 +56,7 @@ public class JwtService implements TokenServicePort {
                 .expiration(Date.from(expiration))
                 .claim("email", email)
                 .claim("roles", roles)
+                .claim("mustChangePassword", mustChangePassword)
                 .signWith(signingKey)
                 .compact();
     }

@@ -34,7 +34,7 @@ public class LogbookController {
     }
 
     @PostMapping("/{logbookId}/validate")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
     @Operation(summary = "Supervisor validates the submitted logbook")
     public ResponseEntity<LogbookResponse> validate(
             @PathVariable UUID internshipId,
@@ -45,7 +45,7 @@ public class LogbookController {
     }
 
     @PostMapping("/{logbookId}/reject")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
     @Operation(summary = "Supervisor rejects the submitted logbook with a reason")
     public ResponseEntity<LogbookResponse> reject(
             @PathVariable UUID internshipId,
@@ -57,8 +57,8 @@ public class LogbookController {
     }
 
     @PostMapping("/{logbookId}/official")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR')")
-    @Operation(summary = "HR/ADMIN finalizes a VALIDATED logbook as OFFICIAL")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "ADMIN finalizes a VALIDATED logbook as OFFICIAL")
     public ResponseEntity<LogbookResponse> promoteToOfficial(
             @PathVariable UUID internshipId,
             @PathVariable UUID logbookId,
@@ -68,7 +68,7 @@ public class LogbookController {
     }
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'SUPERVISOR') or @authz.isParticipantOf(#internshipId)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR') or @authz.isParticipantOf(#internshipId)")
     @Operation(summary = "Get the logbook for an internship (read-only)")
     public ResponseEntity<LogbookResponse> getByInternship(
             @PathVariable UUID internshipId,

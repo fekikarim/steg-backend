@@ -19,6 +19,7 @@ public record TaskResponse(
         TaskStatus status,
         LocalDate dueDate,
         Instant completedAt,
+        String reviewReason,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -39,6 +40,7 @@ public record TaskResponse(
                 task.getStatus(),
                 task.getDueDate(),
                 task.getCompletedAt(),
+                task.getReviewReason(),
                 task.getCreatedAt(),
                 task.getUpdatedAt()
         );

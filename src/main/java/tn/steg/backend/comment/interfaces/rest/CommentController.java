@@ -29,7 +29,7 @@ public class CommentController {
     // -------------------------------------------------------------------------
 
     @PostMapping("/journal/entries/{entryId}/comments")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#entryId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#entryId)")
     @Operation(summary = "Add comment to a journal entry")
     public ResponseEntity<CommentResponse> addJournalEntryComment(
             @PathVariable UUID entryId,
@@ -40,7 +40,7 @@ public class CommentController {
     }
 
     @GetMapping("/journal/entries/{entryId}/comments")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#entryId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#entryId)")
     @Operation(summary = "List comments for a journal entry")
     public ResponseEntity<List<CommentResponse>> getJournalEntryComments(
             @PathVariable UUID entryId,
@@ -53,7 +53,7 @@ public class CommentController {
     // -------------------------------------------------------------------------
 
     @PostMapping("/deliverables/{deliverableId}/comments")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#deliverableId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#deliverableId)")
     @Operation(summary = "Add comment to a deliverable")
     public ResponseEntity<CommentResponse> addDeliverableComment(
             @PathVariable UUID deliverableId,
@@ -64,7 +64,7 @@ public class CommentController {
     }
 
     @GetMapping("/deliverables/{deliverableId}/comments")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#deliverableId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#deliverableId)")
     @Operation(summary = "List comments for a deliverable")
     public ResponseEntity<List<CommentResponse>> getDeliverableComments(
             @PathVariable UUID deliverableId,
@@ -77,7 +77,7 @@ public class CommentController {
     // -------------------------------------------------------------------------
 
     @PostMapping("/evaluations/{evaluationId}/comments")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#evaluationId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#evaluationId)")
     @Operation(summary = "Add comment to an evaluation")
     public ResponseEntity<CommentResponse> addEvaluationComment(
             @PathVariable UUID evaluationId,
@@ -88,7 +88,7 @@ public class CommentController {
     }
 
     @GetMapping("/evaluations/{evaluationId}/comments")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#evaluationId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#evaluationId)")
     @Operation(summary = "List comments for an evaluation")
     public ResponseEntity<List<CommentResponse>> getEvaluationComments(
             @PathVariable UUID evaluationId,

@@ -45,7 +45,9 @@ public class IdentifierValidationService {
         if (nationalId != null && !nationalId.isEmpty()) {
             try {
                 String hash = NationalIdHasher.sha256Hex(nationalId);
-                Optional<Candidate> candidateOpt = candidateRepository.findByNationalIdHash(hash);
+                // Live profiles only: a soft-deleted candidate is not a duplicate
+                // and must never block the person from applying again (V42).
+                Optional<Candidate> candidateOpt = candidateRepository.findByNationalIdHashAndDeletedAtIsNull(hash);
                 if (candidateOpt.isPresent()) {
                     Candidate c = candidateOpt.get();
                     if (!isOwnCandidate(c, currentUserId) && hasExistingApplication(c)) {

@@ -27,7 +27,7 @@ public class AiController {
     private final AiService aiService;
 
     @PostMapping("/applications/{id}/analyze")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("hasRole('ADMIN')")
     @RateLimited(name = "ai-analyze", limit = 20, windowSeconds = 60)
     @Operation(summary = "Analyze application documents (Advisory, staff-triggered)")
     public ResponseEntity<AiAnalysisResultResponse> analyzeApplication(
@@ -37,7 +37,7 @@ public class AiController {
     }
 
     @PostMapping("/finance-cases/{id}/analyze")
-    @PreAuthorize("hasAnyRole('ADMIN', 'FINANCE')")
+    @PreAuthorize("hasRole('ADMIN')")
     @RateLimited(name = "ai-finance-analyze", limit = 20, windowSeconds = 60)
     @Operation(summary = "Analyze finance case dossier (Advisory, FINANCE-role only)")
     public ResponseEntity<AiAnalysisResultResponse> analyzeFinanceCase(
@@ -47,7 +47,7 @@ public class AiController {
     }
 
     @PostMapping("/internships/{id}/logbook/generate")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#id)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#id)")
     @RateLimited(name = "ai-logbook-generate", limit = 10, windowSeconds = 60)
     @Operation(summary = "Generate draft logbook based on journal, tasks, and deliverables (Intern/Supervisor)")
     public ResponseEntity<AiAnalysisResultResponse> generateLogbook(
@@ -57,9 +57,9 @@ public class AiController {
     }
 
     @PostMapping("/assistant/query")
-    @PreAuthorize("hasAnyRole('CANDIDATE', 'INTERN', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('CANDIDATE', 'INTERN', 'SUPERVISOR', 'ADMIN')")
     @RateLimited(name = "ai-assistant", limit = 20, windowSeconds = 60)
-    @Operation(summary = "Candidate virtual assistant Q&A (Strictly candidate-scoped)")
+    @Operation(summary = "Virtual assistant Q&A (role-scoped: candidate/intern context, supervisor assignments, staff aggregates)")
     public ResponseEntity<AiAnalysisResultResponse> queryAssistant(
             @Valid @RequestBody CandidateAssistantQueryRequest request,
             @AuthenticationPrincipal UserPrincipal actor) {
@@ -67,7 +67,7 @@ public class AiController {
     }
 
     @PostMapping("/recommendations/{id}/review")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'FINANCE', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
     @RateLimited(name = "ai-review", limit = 20, windowSeconds = 60)
     @Operation(summary = "Review AI recommendation (Human marks ACCEPTED_BY_HUMAN or DISMISSED for traceability)")
     public ResponseEntity<AiRecommendationResponse> reviewRecommendation(

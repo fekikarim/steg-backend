@@ -12,8 +12,8 @@ import java.util.UUID;
 public interface DocumentRepository {
     Optional<Document> findById(UUID id);
     Optional<Document> findByReference(String reference);
-    boolean existsByReference(String reference);
-    long countByReferencePrefix(String prefix);
+    /** Atomic reference counter (sequence-backed, race-free — see V51). */
+    long nextReferenceSequence();
     Document save(Document document);
     Document saveAndFlush(Document document);
     List<Document> findAllByRestrictedAccessFalse();

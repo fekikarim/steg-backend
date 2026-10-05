@@ -22,7 +22,7 @@ import java.io.IOException;
  */
 @RestController
 @RequiredArgsConstructor
-@Tag(name = "Documents", description = "Public ad-hoc document validation (anonymous wizard)")
+@Tag(name = "Public Documents", description = "Public ad-hoc document validation (anonymous wizard)")
 public class PublicDocumentValidationController {
 
     private final DocumentService documentService;

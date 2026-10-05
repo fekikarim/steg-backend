@@ -19,6 +19,7 @@ import tn.steg.backend.certificate.application.CertificateService;
 import tn.steg.backend.certificate.domain.repository.CertificateRepository;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.support.InternshipLifecycleFixture;
 import tn.steg.backend.document.application.DocumentService;
 import tn.steg.backend.document.domain.model.DocumentType;
 import tn.steg.backend.document.infrastructure.persistence.DocumentRepository;
@@ -37,6 +38,8 @@ import tn.steg.backend.finance.domain.repository.PaymentReceiptRepository;
 import tn.steg.backend.iam.domain.model.User;
 import tn.steg.backend.iam.domain.model.UserStatus;
 import tn.steg.backend.iam.infrastructure.persistence.UserRepository;
+import tn.steg.backend.internship.application.InternshipLifecycleService;
+import tn.steg.backend.internship.application.InternshipLifecycleService;
 import tn.steg.backend.internship.application.InternshipService;
 import tn.steg.backend.internship.application.dto.InternshipAssignmentRequest;
 import tn.steg.backend.internship.application.dto.InternshipCreateManualRequest;
@@ -51,6 +54,7 @@ import tn.steg.backend.organization.infrastructure.persistence.EmployeeRepositor
 import tn.steg.backend.workflow.application.WorkflowService;
 import tn.steg.backend.workflow.application.dto.WorkflowTransitionRequest;
 import tn.steg.backend.workflow.domain.model.WorkflowActionType;
+import tn.steg.backend.workflow.domain.model.ApprovalDecision;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -106,6 +110,8 @@ class FinanceConcurrencyTest {
 
     @Autowired
     private InternshipService internshipService;
+    @Autowired
+    private InternshipLifecycleService lifecycleService;
 
     @Autowired
     private WorkflowService workflowService;
@@ -162,9 +168,9 @@ class FinanceConcurrencyTest {
         User supervisorUser = userRepository.saveAndFlush(new User("sup_fx_" + suffix + "@steg.com", "hash", UserStatus.ACTIVE));
         User internUser = userRepository.saveAndFlush(new User("int_fx_" + suffix + "@steg.com", "hash", UserStatus.ACTIVE));
 
-        financePrincipal = new UserPrincipal(financeUser.getId(), financeUser.getEmail(), List.of("ROLE_FINANCE"));
+        financePrincipal = new UserPrincipal(financeUser.getId(), financeUser.getEmail(), List.of("ROLE_ADMIN"));
         supervisorPrincipal = new UserPrincipal(supervisorUser.getId(), supervisorUser.getEmail(), List.of("ROLE_SUPERVISOR"));
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         Department dept = departmentRepository.saveAndFlush(new Department("DIR_FX_" + suffix, "Fx Dept", "FX"));
         Employee supervisorEmployee = new Employee("EMP-FX-S-" + suffix, "Fx", "Sup", dept);
@@ -190,8 +196,13 @@ class FinanceConcurrencyTest {
         internshipService.assign(internship.getId(), new InternshipAssignmentRequest(
                 dept.getId(), supervisorEmployee.getId(),
                 LocalDate.of(2026, 1, 1), LocalDate.of(2026, 4, 1), "fx"), hrPrincipal);
-        workflowService.transitionInternship(internship.getId(),
-                new WorkflowTransitionRequest("COMPLETED", WorkflowActionType.COMPLETION, null, "done"), hrPrincipal);
+        InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository, internship.getId(), hrPrincipal);
+        // Administrative validation is a precondition for certificates.
+        InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository, internship.getId(), hrPrincipal);
         internshipId = internship.getId();
     }
 

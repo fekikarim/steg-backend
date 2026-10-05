@@ -197,7 +197,7 @@ public class DocumentService {
 
     /**
      * E2 IDOR fix: a document is visible only to its uploader (owner) and to staff
-     * holding all-documents read (ADMIN/HR/SUPERVISOR/FINANCE/DIRECTOR, mirroring
+     * holding all-documents read (ADMIN/SUPERVISOR, mirroring
      * DOCUMENT_ALL_READ). Everyone else gets 403 — no existence oracle change
      * (unknown ids still 404 above).
      */
@@ -217,8 +217,7 @@ public class DocumentService {
     }
 
     private boolean isStaffReader(UserPrincipal actor) {
-        return actor.hasRole("ADMIN") || actor.hasRole("HR") || actor.hasRole("SUPERVISOR")
-                || actor.hasRole("FINANCE") || actor.hasRole("DIRECTOR");
+        return actor.hasRole("ADMIN") || actor.hasRole("SUPERVISOR");
     }
 
     public record DownloadStream(InputStream inputStream, String fileName, String mimeType, long size) {}
@@ -482,8 +481,6 @@ public class DocumentService {
 
     private String generateDocumentReference() {
         int year = Year.now().getValue();
-        String prefix = "DOC-" + year + "-";
-        long count = documentRepository.countByReferencePrefix(prefix);
-        return String.format("%s%05d", prefix, count + 1);
+        return String.format("DOC-%d-%05d", year, documentRepository.nextReferenceSequence());
     }
 }

@@ -188,7 +188,7 @@ class DomainModelPersistenceIntegrationTest {
         Internship i = new Internship(ref, candidate,
                 LocalDate.now().minusMonths(2), LocalDate.now(),
                 InternshipType.OBSERVATION, InternshipRequirement.OBLIGATOIRE);
-        i.setStatus(InternshipStatus.ACTIVE);
+        i.setStatus(InternshipStatus.IN_PROGRESS);
         em.persist(i);
         em.flush();
         return i;
@@ -228,10 +228,10 @@ class DomainModelPersistenceIntegrationTest {
 
         @Test @DisplayName("Role persists with unique code")
         void rolePersists() {
-            Role role = new Role("ROLE_HR", "HR Manager", "HR department");
+            Role role = new Role("ROLE_TEST", "Test Role", "persistence probe");
             em.persist(role);
             em.flush();
-            Optional<Role> found = roleRepository.findByCode("ROLE_HR");
+            Optional<Role> found = roleRepository.findByCode("ROLE_TEST");
             assertThat(found).isPresent();
         }
 

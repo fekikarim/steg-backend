@@ -30,14 +30,25 @@ class AuditCoverageChecklistTest {
         // Application accept/reject (WorkflowService — decision mapping helper)
         put("APPLICATION_ACCEPTED", "workflow/application/WorkflowService.java");
         put("APPLICATION_REJECTED", "workflow/application/WorkflowService.java");
-        put("APPLICATION_NEEDS_CORRECTION", "workflow/application/WorkflowService.java");
+        // S1b: new rows are written as APPLICATION_MODIFICATION_REQUESTED. The
+        // historical APPLICATION_NEEDS_CORRECTION code is kept in the audit
+        // VIEWER only (append-only history, audit assumption #15) — it is no
+        // longer emitted, so it is not required to exist in a service.
+        put("APPLICATION_MODIFICATION_REQUESTED", "workflow/application/WorkflowService.java");
         put("APPLICATION_UNDER_REVIEW", "workflow/application/WorkflowService.java");
-        // Internship activation/completion (WorkflowService — transition ternary)
-        put("INTERNSHIP_COMPLETED", "workflow/application/WorkflowService.java");
-        put("INTERNSHIP_ACTIVATED", "workflow/application/WorkflowService.java");
+        // Internship lifecycle (S6b single authority — the legacy workflow
+        // engine's INTERNSHIP_COMPLETED/INTERNSHIP_ACTIVATED codes are deleted
+        // with it; every step is audited as INTERNSHIP_STATUS_CHANGED by
+        // InternshipLifecycleService, cancellation as INTERNSHIP_CANCELLED)
+        put("INTERNSHIP_STATUS_CHANGED", "internship/application/InternshipLifecycleService.java");
+        put("INTERNSHIP_CANCELLED", "internship/application/InternshipLifecycleService.java");
+        // S7 validation: advisory AI runs, mandatory manual decisions, receipt
+        put("AI_VERIFICATION_RUN", "internship/application/InternshipValidationService.java");
+        put("VALIDATION_DECISION_VALIDATED", "internship/application/InternshipValidationService.java");
+        put("VALIDATION_DECISION_REJECTED", "internship/application/InternshipValidationService.java");
+        put("VALIDATION_DOCUMENT_DOWNLOADED", "internship/application/InternshipValidationService.java");
         // Assignment / supervisor change (InternshipService)
         put("INTERNSHIP_ASSIGNMENT_ASSIGNED", "internship/application/InternshipService.java");
-        put("INTERNSHIP_CANCELLED", "internship/application/InternshipService.java");
         put("INTERNSHIP_REQUIREMENT_CHANGED", "internship/application/InternshipService.java");
         // Journal + deliverable validation (CompanionService)
         put("JOURNAL_ENTRY_VALIDATED", "companion/application/CompanionService.java");
@@ -49,6 +60,8 @@ class AuditCoverageChecklistTest {
         // Certificate generation + downloads (CertificateService)
         put("CERTIFICATE_GENERATED", "certificate/application/CertificateService.java");
         put("CERTIFICATE_DOWNLOADED", "certificate/application/CertificateService.java");
+        put("CERTIFICATE_REGENERATED", "certificate/application/CertificateService.java");
+        put("CERTIFICATE_REVOKED", "certificate/application/CertificateService.java");
         // Finance approval / rejection / receipt (FinanceService)
         put("FINANCE_CASE_APPROVED", "finance/application/FinanceService.java");
         put("FINANCE_CASE_REJECTED", "finance/application/FinanceService.java");
@@ -58,9 +71,24 @@ class AuditCoverageChecklistTest {
         // Authentication / registration (role assignment surface) (AuthService)
         put("USER_REGISTERED", "iam/application/AuthService.java");
         put("USER_LOGIN", "iam/application/AuthService.java");
+        put("BACK_OFFICE_LOGIN_REFUSED", "iam/application/AuthService.java");
         put("ACCOUNT_LOCKED", "iam/application/AuthService.java");
         // AI recommendation human review (AiService)
         put("AI_RECOMMENDATION_REVIEWED", "ai/application/AiService.java");
+        // S10b back-office chatbot (ChatbotService — metadata only, never content)
+        put("AI_CHATBOT_QUERIED", "ai/application/ChatbotService.java");
+        put("AI_CHATBOT_HISTORY_CLEARED", "ai/application/ChatbotService.java");
+        // S10a AI task drafts (AiTaskDraftService — metadata only, never
+        // prompt, instruction, PDF or draft content)
+        put("AI_TASK_DRAFTS_GENERATED", "companion/application/AiTaskDraftService.java");
+        put("AI_TASK_DRAFT_ADDED", "companion/application/AiTaskDraftService.java");
+        put("AI_TASK_DRAFT_EDITED", "companion/application/AiTaskDraftService.java");
+        put("AI_TASK_DRAFT_REVISED", "companion/application/AiTaskDraftService.java");
+        put("AI_TASK_DRAFT_DELETED", "companion/application/AiTaskDraftService.java");
+        put("AI_TASK_DRAFTS_BULK_ADDED", "companion/application/AiTaskDraftService.java");
+        // Front-office account validation (CandidateService — self-registration
+        // and staff-profile claim; AGENTS.md §8.1 new-candidate notification)
+        put("CANDIDATE_VALIDATED", "candidate/application/CandidateService.java");
         // Conversation membership changes (MessagingService — plan §1 requires these)
         put("CONVERSATION_MEMBER_ADDED", "messaging/application/MessagingService.java");
         put("CONVERSATION_MEMBER_REMOVED", "messaging/application/MessagingService.java");

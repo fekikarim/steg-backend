@@ -21,12 +21,15 @@ import tn.steg.backend.notification.domain.model.NotificationChannel;
 import tn.steg.backend.notification.domain.model.NotificationDelivery;
 import tn.steg.backend.notification.domain.model.NotificationDeliveryStatus;
 import tn.steg.backend.notification.domain.model.NotificationPriority;
+import tn.steg.backend.notification.domain.exception.EmailDeliveryException;
 import tn.steg.backend.audit.application.AuditService;
+import tn.steg.backend.common.application.ApplicationTimeZone;
 import tn.steg.backend.notification.domain.repository.NotificationDeliveryRepository;
 import tn.steg.backend.notification.domain.repository.NotificationRepository;
 
 import jakarta.annotation.PreDestroy;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
@@ -65,6 +68,15 @@ public class NotificationService {
 
     private static final int RETRY_BATCH_SIZE = 100;
 
+    /** Role code of the staff surface that acts on administrative alerts. */
+    public static final String ADMIN_ROLE_CODE = "ADMIN";
+
+    /** Title of the "internship ended without its FINAL report" alert. */
+    public static final String FINAL_EVALUATION_TITLE = "Final evaluation required";
+
+    /** Exactly-once key shared by the completion event and the self-healing sweep. */
+    public static final String FINAL_EVALUATION_DEDUPE_PREFIX = "FINAL_EVALUATION_REQUIRED:";
+
     private final NotificationRepository notificationRepository;
     private final NotificationDeliveryRepository deliveryRepository;
     private final UserRepository userRepository;
@@ -72,6 +84,7 @@ public class NotificationService {
     private final PushNotificationSender pushSender;
     private final RealtimeNotifier realtimeNotifier;
     private final AuditService auditService;
+    private final ApplicationTimeZone applicationTimeZone;
 
     @Value("${steg.notifications.mail.enabled:false}")
     private boolean mailEnabled;
@@ -102,12 +115,13 @@ public class NotificationService {
     private static final AtomicInteger EMAIL_THREAD_SEQ = new AtomicInteger();
 
     public NotificationService(NotificationRepository notificationRepository,
-                               NotificationDeliveryRepository deliveryRepository,
-                               UserRepository userRepository,
-                               EmailSender emailSender,
-                               PushNotificationSender pushSender,
-                               RealtimeNotifier realtimeNotifier,
-                               AuditService auditService) {
+                                NotificationDeliveryRepository deliveryRepository,
+                                UserRepository userRepository,
+                                EmailSender emailSender,
+                                PushNotificationSender pushSender,
+                                RealtimeNotifier realtimeNotifier,
+                                AuditService auditService,
+                                ApplicationTimeZone applicationTimeZone) {
         this.notificationRepository = notificationRepository;
         this.deliveryRepository = deliveryRepository;
         this.userRepository = userRepository;
@@ -115,6 +129,7 @@ public class NotificationService {
         this.pushSender = pushSender;
         this.realtimeNotifier = realtimeNotifier;
         this.auditService = auditService;
+        this.applicationTimeZone = applicationTimeZone;
         // Cached daemon pool: tasks complete in ~1-2s when Resend is healthy;
         // stuck tasks (dead network) hold a thread until the socket dies, but
         // never the request thread (see EMAIL_SEND_BUDGET_SECONDS).
@@ -203,6 +218,32 @@ public class NotificationService {
     }
 
     /**
+     * Role-scoped fan-out: resolves every active staff user holding
+     * {@code roleCode} and dispatches to them. Used for administrative alerts
+     * that are not tied to a single known recipient (e.g. an internship that
+     * ended without a final evaluation → all administrators).
+     *
+     * <p>Pass a {@code dedupeKey} for exactly-once semantics across event and
+     * sweep paths; the resolution is intentionally cheap (one indexed query)
+     * and an empty recipient set is logged, never thrown.
+     */
+    @Transactional
+    public Notification dispatchToRole(String dedupeKey, String roleCode, String title, String message,
+                                       NotificationPriority priority,
+                                       String relatedEntityType, UUID relatedEntityId,
+                                       UUID actorId) {
+        List<UUID> recipients = userRepository.findDistinctByAssignedRoles_Code(roleCode).stream()
+                .filter(user -> Boolean.TRUE.equals(user.getEnabled()))
+                .map(User::getId)
+                .toList();
+        if (recipients.isEmpty()) {
+            log.warn("No active user holds role {} — notification {} not delivered to anyone", roleCode, title);
+        }
+        return dispatchOnce(dedupeKey, title, message, priority, relatedEntityType, relatedEntityId,
+                recipients, actorId);
+    }
+
+    /**
      * Pure channel-selection rule (unit-tested):
      * IN_APP always; EMAIL for HIGH/URGENT when Resend is enabled and the user
      * opted in; PUSH for URGENT only.
@@ -270,7 +311,8 @@ public class NotificationService {
                         java.util.Map.of("channel", delivery.getChannel().name(),
                                 "recipient", recipient.getId().toString(),
                                 "reason", String.valueOf(delivery.getFailureReason())),
-                        null, null);
+                        null, null, null, null,
+                        tn.steg.backend.audit.domain.model.AuditSource.SYSTEM);
             }
         }
     }
@@ -289,19 +331,19 @@ public class NotificationService {
             future.get(EMAIL_SEND_BUDGET_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException te) {
             future.cancel(true);
-            throw new tn.steg.backend.notification.infrastructure.mail.ResendEmailSender.EmailDeliveryException(
+            throw new EmailDeliveryException(
                     "Email delivery timed out after " + EMAIL_SEND_BUDGET_SECONDS + "s", te);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             future.cancel(true);
-            throw new tn.steg.backend.notification.infrastructure.mail.ResendEmailSender.EmailDeliveryException(
+            throw new EmailDeliveryException(
                     "Email delivery interrupted", ie);
         } catch (java.util.concurrent.ExecutionException ee) {
             Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
             if (cause instanceof RuntimeException re) {
                 throw re;
             }
-            throw new tn.steg.backend.notification.infrastructure.mail.ResendEmailSender.EmailDeliveryException(
+            throw new EmailDeliveryException(
                     "Email delivery failed", cause);
         }
     }
@@ -326,9 +368,29 @@ public class NotificationService {
 
     @Transactional(readOnly = true)
     public Page<NotificationResponse> listMine(UserPrincipal actor, boolean unreadOnly, Pageable pageable) {
+        return listMine(actor, unreadOnly, null, null, pageable);
+    }
+
+    /**
+     * Own IN_APP deliveries with an optional calendar-day date-range filter.
+     * Day bounds resolve in the application time zone (default Africa/Tunis).
+     */
+    @Transactional(readOnly = true)
+    public Page<NotificationResponse> listMine(UserPrincipal actor, boolean unreadOnly,
+                                              LocalDate fromDate, LocalDate toDate, Pageable pageable) {
+        if (fromDate == null && toDate == null) {
+            Page<NotificationDelivery> page = unreadOnly
+                    ? deliveryRepository.findUnreadInAppByRecipientId(actor.getId(), pageable)
+                    : deliveryRepository.findInAppByRecipientId(actor.getId(), pageable);
+            return page.map(delivery -> NotificationResponse.from(delivery.getNotification(), delivery));
+        }
+        Instant from = fromDate != null ? applicationTimeZone.startOfDay(fromDate) : null;
+        Instant toExclusive = toDate != null ? applicationTimeZone.startOfNextDay(toDate) : null;
         Page<NotificationDelivery> page = unreadOnly
-                ? deliveryRepository.findUnreadInAppByRecipientId(actor.getId(), pageable)
-                : deliveryRepository.findInAppByRecipientId(actor.getId(), pageable);
+                ? deliveryRepository.findUnreadInAppByRecipientIdAndDateRange(
+                        actor.getId(), from, toExclusive, pageable)
+                : deliveryRepository.findInAppByRecipientIdAndDateRange(
+                        actor.getId(), from, toExclusive, pageable);
         return page.map(delivery -> NotificationResponse.from(delivery.getNotification(), delivery));
     }
 

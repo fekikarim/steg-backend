@@ -22,7 +22,7 @@ import java.util.UUID;
 
 /**
  * Application service for the Organization module.
- * Manages departments and employees; restricted to ADMIN and HR staff.
+ * Manages departments and employees; restricted to ADMIN staff.
  */
 @Slf4j
 @Service

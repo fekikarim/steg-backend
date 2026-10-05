@@ -73,6 +73,13 @@ public class GeminiCompletionClient implements AiCompletionClient {
                     aiProperties.getModel(), getProvider());
         }
 
+        String model = aiProperties.getModel();
+        if (model == null || model.isBlank()) {
+            log.warn("Gemini model is not configured (AI_MODEL/GEMINI_MODEL). Degrading gracefully.");
+            return AiCompletionResult.failure("AI service is not configured with a model name.",
+                    "", getProvider());
+        }
+
         try {
             // Build Gemini v1beta generateContent payload
             Map<String, Object> requestPayload = new HashMap<>();
@@ -109,9 +116,9 @@ public class GeminiCompletionClient implements AiCompletionClient {
             String requestJson = objectMapper.writeValueAsString(requestPayload);
 
             // POST /v1beta/models/{model}:generateContent?key={apiKey}
-            String endpointPath = "/v1beta/models/" + aiProperties.getModel() + ":generateContent";
+            String endpointPath = "/v1beta/models/" + model + ":generateContent";
 
-            log.debug("Sending completion request to Gemini model={}", aiProperties.getModel());
+            log.debug("Sending completion request to Gemini model={}", model);
 
             String responseBody = restClient.post()
                     .uri(uriBuilder -> uriBuilder

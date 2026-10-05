@@ -216,9 +216,9 @@ class CompanionIntegrationTest {
     void taskLifecycle() throws Exception {
         TaskRequest request = new TaskRequest("Write Architecture Specs", "First draft of specs", internUser.getId(), LocalDate.now().plusDays(5), TaskStatus.TODO);
 
-        // Create task
+        // Create task (owning intern; supervisors read tasks but never author them)
         String response = mockMvc.perform(post("/api/internships/" + internship.getId() + "/tasks")
-                        .header("Authorization", "Bearer " + supervisorToken)
+                        .header("Authorization", "Bearer " + internToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
@@ -384,5 +384,75 @@ class CompanionIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(commentReq)))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Supervisor scope: unassigned supervisor reads 403, assigned reads 200, ADMIN reads 200")
+    void supervisorReadScope() throws Exception {
+        String tasksUrl = "/api/internships/" + internship.getId() + "/tasks";
+        String journalUrl = "/api/internships/" + internship.getId() + "/journal/entries";
+
+        // Unassigned supervisor sees nothing (assigned-only enforcement: 404 hides out-of-scope task list).
+        mockMvc.perform(get(tasksUrl)
+                        .header("Authorization", "Bearer " + otherSupervisorToken))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get(journalUrl)
+                        .header("Authorization", "Bearer " + otherSupervisorToken))
+                .andExpect(status().isForbidden());
+
+        // Assigned supervisor reads their intern's workspace.
+        mockMvc.perform(get(tasksUrl)
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isOk());
+        mockMvc.perform(get(journalUrl)
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isOk());
+
+        // ADMIN bypasses assignment checks (administrator-as-supervisor works).
+        mockMvc.perform(get(tasksUrl)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk());
+        mockMvc.perform(get(journalUrl)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+        @DisplayName("Task writes: assigned supervisor, owning intern and ADMIN succeed")
+    void taskWriteScope() throws Exception {
+        TaskRequest request = new TaskRequest("Scoped task", "scope probe", internUser.getId(),
+                LocalDate.now().plusDays(3), TaskStatus.TODO);
+
+        // Assigned supervisor can author tasks within the supervision scope.
+        mockMvc.perform(post("/api/internships/" + internship.getId() + "/tasks")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated());
+
+        // Owning intern authors their own task.
+        String created = mockMvc.perform(post("/api/internships/" + internship.getId() + "/tasks")
+                        .header("Authorization", "Bearer " + internToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        UUID taskId = UUID.fromString(objectMapper.readTree(created).get("id").asText());
+
+        // Assigned supervisor can advance it within the supervision scope.
+        mockMvc.perform(patch("/api/internships/tasks/" + taskId + "/status?status=COMPLETED")
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isOk());
+
+        // Owning intern advances their own task.
+        mockMvc.perform(patch("/api/internships/tasks/" + taskId + "/status?status=COMPLETED")
+                        .header("Authorization", "Bearer " + internToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("COMPLETED"));
+
+        // Unassigned supervisor cannot even read the task list (404 hides out-of-scope).
+        mockMvc.perform(get("/api/internships/" + internship.getId() + "/tasks")
+                        .header("Authorization", "Bearer " + otherSupervisorToken))
+                .andExpect(status().isNotFound());
     }
 }

@@ -145,7 +145,7 @@ class CrossModuleIdorTest {
     }
 
     @Test
-    @DisplayName("internship reads: owner reads own, stranger gets 403 (no candidateFullName leak)")
+    @DisplayName("internship reads: owner reads own, stranger gets 404 (no existence leak, §3.4)")
     void internshipCrossCandidateReadBlocked() throws Exception {
         Candidate candA = createCandidate("idor_a@test.tn", "10000001");
         Candidate candB = createCandidate("idor_b@test.tn", "10000002");
@@ -156,9 +156,11 @@ class CrossModuleIdorTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.candidateFullName").value("Idor Cand"));
 
+        // S6b: row-level denial is 404 (no oracle), not 403 — a stranger must
+        // not learn that the internship exists.
         mockMvc.perform(get("/api/internships/" + internshipA)
                         .header("Authorization", "Bearer " + candidateToken(candB)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isNotFound());
 
         mockMvc.perform(get("/api/internships/" + internshipA + "/classification")
                         .header("Authorization", "Bearer " + candidateToken(candB)))
@@ -185,7 +187,7 @@ class CrossModuleIdorTest {
         String sup2Token = token(sup2User, "ROLE_SUPERVISOR");
 
         String templateBody = mockMvc.perform(post("/api/evaluation-templates")
-                        .header("Authorization", "Bearer " + hrToken)
+                        .header("Authorization", "Bearer " + adminToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
                                 new EvaluationTemplateRequest("IDOR template", "desc"))))
@@ -193,7 +195,7 @@ class CrossModuleIdorTest {
                 .andReturn().getResponse().getContentAsString();
         UUID templateId = UUID.fromString(objectMapper.readTree(templateBody).get("id").asText());
         mockMvc.perform(post("/api/evaluation-templates/" + templateId + "/criteria")
-                        .header("Authorization", "Bearer " + hrToken)
+                        .header("Authorization", "Bearer " + adminToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
                                 new EvaluationCriterionRequest("Tech", "d", new BigDecimal("100.0"), new BigDecimal("20.0")))))
@@ -229,7 +231,7 @@ class CrossModuleIdorTest {
     }
 
     @Test
-    @DisplayName("finance cases: candidate and HR denied; finance sees 404 for unknown id, not data")
+    @DisplayName("finance cases: candidate and obsolete roles denied; supervisor scoped; admin sees all")
     void financeCaseAccessDeniedForNonFinance() throws Exception {
         Candidate cand = createCandidate("idor_f@test.tn", "30000001");
         UUID unknown = UUID.randomUUID();
@@ -237,6 +239,7 @@ class CrossModuleIdorTest {
         mockMvc.perform(get("/api/finance-cases")
                         .header("Authorization", "Bearer " + candidateToken(cand)))
                 .andExpect(status().isForbidden());
+        // Obsolete roles are rejected everywhere even with a valid JWT.
         mockMvc.perform(get("/api/finance-cases")
                         .header("Authorization", "Bearer " + hrToken))
                 .andExpect(status().isForbidden());
@@ -244,12 +247,17 @@ class CrossModuleIdorTest {
                         .header("Authorization", "Bearer " + candidateToken(cand)))
                 .andExpect(status().isForbidden());
 
-        // FINANCE role passes the gate: unknown id is a clean 404, list is reachable.
+        // ADMIN passes the gate: unknown id is a clean 404, list is reachable.
         mockMvc.perform(get("/api/finance-cases/" + unknown)
-                        .header("Authorization", "Bearer " + financeToken))
+                        .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isNotFound());
         mockMvc.perform(get("/api/finance-cases")
-                        .header("Authorization", "Bearer " + financeToken))
+                        .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk());
+
+        // Foreign FINANCE token (obsolete role) cannot reach anything either.
+        mockMvc.perform(get("/api/finance-cases")
+                        .header("Authorization", "Bearer " + financeToken))
+                .andExpect(status().isForbidden());
     }
 }

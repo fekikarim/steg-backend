@@ -159,7 +159,7 @@ public class CommentService {
     // -------------------------------------------------------------------------
 
     private void validateParticipant(Internship internship, UserPrincipal actor) {
-        if (actor.hasRole("ADMIN") || actor.hasRole("HR")) {
+        if (actor.hasRole("ADMIN")) {
             return;
         }
 

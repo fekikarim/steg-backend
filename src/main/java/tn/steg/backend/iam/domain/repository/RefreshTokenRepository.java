@@ -13,5 +13,13 @@ public interface RefreshTokenRepository {
     Optional<RefreshToken> findByTokenHash(String tokenHash);
     List<RefreshToken> findByUserIdAndRevokedAtIsNull(UUID userId);
     RefreshToken save(RefreshToken token);
+
+    /**
+     * Session revocation: marks EVERY active refresh token of the account as
+     * revoked (deactivation, deletion, admin password reset). Tokens stay as
+     * revoked rows for traceability; the refresh flow refuses them.
+     */
+    void revokeAllForUser(UUID userId);
+
     void deleteByUserId(UUID userId);
 }

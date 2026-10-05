@@ -81,6 +81,7 @@ import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -160,7 +161,7 @@ public class FinanceService {
 
     @Transactional
     public FinanceCaseResponse openFinanceCase(UUID internshipId, UserPrincipal actor) {
-        requireFinanceStaff(actor);
+        requireAdmin(actor);
         Internship internship = internshipRepository.findById(internshipId)
                 .orElseThrow(() -> new ResourceNotFoundException("Internship not found: " + internshipId));
         if (!eligibilityService.isPaymentEligible(internship)) {
@@ -168,15 +169,14 @@ public class FinanceService {
                     "Only OBLIGATOIRE internships are eligible for the payment workflow. Requirement: "
                             + internship.getRequirement());
         }
-        if (internship.getStatus() != InternshipStatus.COMPLETED) {
+        if (internship.getStatus() != InternshipStatus.VALIDATED) {
             throw new BusinessRuleException("INTERNSHIP_NOT_COMPLETED",
                     "A finance case can only be opened for a COMPLETED internship. Current: " + internship.getStatus());
         }
         // E1.3: a generated (non-revoked) official certificate is mandatory before
         // any finance case may exist — enforced here, not merely hidden in the UI.
         boolean certificatePresent = certificateRepository.findByInternshipId(internshipId).stream()
-                .anyMatch(c -> c.getStatus() == CertificateStatus.GENERATED
-                        || c.getStatus() == CertificateStatus.ISSUED);
+                .anyMatch(c -> c.getStatus() != CertificateStatus.REVOKED);
         if (!certificatePresent) {
             throw new BusinessRuleException("INTERNSHIP_CERTIFICATE_REQUIRED",
                     "A finance case requires a generated official certificate for internship: "
@@ -202,11 +202,21 @@ public class FinanceService {
     }
 
     @Transactional(readOnly = true)
-    public Page<FinanceCaseResponse> listFinanceCases(FinanceCaseStatus status, Pageable pageable) {
-        // A14 N+1 fix: internship fetched in the page query itself (see port).
-        Page<FinanceCase> page = status == null
-                ? financeCaseRepository.findAllWithInternship(pageable)
-                : financeCaseRepository.findByStatusWithInternship(status, pageable);
+    public Page<FinanceCaseResponse> listFinanceCases(FinanceCaseStatus status, Pageable pageable, UserPrincipal actor) {
+        requireFinanceStaff(actor);
+        // Supervisors see only cases for internships they actively supervise;
+        // ADMIN sees all. Scoping happens in the page query itself so paging
+        // counts stay correct (never filter-then-paginate in memory).
+        Page<FinanceCase> page;
+        if (actor.hasRole("ADMIN")) {
+            page = status == null
+                    ? financeCaseRepository.findAllWithInternship(pageable)
+                    : financeCaseRepository.findByStatusWithInternship(status, pageable);
+        } else {
+            page = status == null
+                    ? financeCaseRepository.findAllForSupervisor(actor.getId(), pageable)
+                    : financeCaseRepository.findByStatusForSupervisor(status, actor.getId(), pageable);
+        }
         if (page.isEmpty()) {
             return page.map(this::toResponse);
         }
@@ -248,8 +258,11 @@ public class FinanceService {
     }
 
     @Transactional(readOnly = true)
-    public FinanceCaseResponse getFinanceCase(UUID financeCaseId) {
-        return toResponse(findCaseOrThrow(financeCaseId));
+    public FinanceCaseResponse getFinanceCase(UUID financeCaseId, UserPrincipal actor) {
+        requireFinanceStaff(actor);
+        FinanceCase financeCase = findCaseOrThrow(financeCaseId);
+        assertSupervisorScope(financeCase, actor);
+        return toResponse(financeCase);
     }
 
     // ------------------------------------------------------------------
@@ -259,7 +272,7 @@ public class FinanceService {
     @Transactional
     public FinanceCaseDocumentResponse attachDocument(UUID financeCaseId, AttachFinanceDocumentRequest request,
                                                      UserPrincipal actor) {
-        requireFinanceStaff(actor);
+        requireAdmin(actor);
         FinanceCase financeCase = findMutableCaseOrThrow(financeCaseId);
         Document document = documentRepository.findById(request.documentId())
                 .orElseThrow(() -> new ResourceNotFoundException("Document not found: " + request.documentId()));
@@ -281,7 +294,7 @@ public class FinanceService {
     @Transactional
     public FinanceCaseDocumentResponse reviewDocument(UUID financeCaseId, UUID documentId,
                                                      ReviewFinanceDocumentRequest request, UserPrincipal actor) {
-        requireFinanceStaff(actor);
+        requireAdmin(actor);
         FinanceCase financeCase = findMutableCaseOrThrow(financeCaseId);
         FinanceCaseDocument link = financeCaseDocumentRepository
                 .findByFinanceCaseIdAndDocumentId(financeCaseId, documentId)
@@ -307,7 +320,7 @@ public class FinanceService {
 
     @Transactional
     public FinanceCaseResponse recalculate(UUID financeCaseId, UserPrincipal actor) {
-        requireFinanceStaff(actor);
+        requireAdmin(actor);
         FinanceCase financeCase = findMutableCaseOrThrow(financeCaseId);
 
         PaymentCalculationResult result = calculateFor(financeCase.getInternship());
@@ -356,8 +369,10 @@ public class FinanceService {
     }
 
     private FinanceCaseResponse doApprove(UUID financeCaseId, PaymentDecisionRequest request, UserPrincipal actor) {
-        Employee decider = requireFinanceEmployee(actor);
+        Employee decider = requireDecider(actor);
         FinanceCase financeCase = findMutableCaseOrThrow(financeCaseId);
+        assertSupervisorScope(financeCase, actor);
+        assertPaymentEligible(financeCase);
         if (financeCase.getStatus() != FinanceCaseStatus.READY_FOR_DECISION) {
             throw new BusinessRuleException("FINANCE_CASE_NOT_READY",
                     "Payment can only be approved once the dossier is READY_FOR_DECISION. Current: "
@@ -383,7 +398,7 @@ public class FinanceService {
         approvalRepository.save(new PaymentApproval(financeCase, decider,
                 PaymentApprovalDecision.APPROVED, request != null ? request.comment() : null, sequence));
 
-        PaymentReceipt receipt = issueReceipt(financeCase, calculation, decider, actor);
+        PaymentReceipt receipt = issueOrReuseReceipt(financeCase, calculation, decider, actor);
 
         financeCase.setStatus(FinanceCaseStatus.APPROVED);
         financeCase.setClosedAt(Instant.now());
@@ -398,8 +413,10 @@ public class FinanceService {
 
         assignmentRepository.findByInternshipIdAndStatus(
                         financeCase.getInternship().getId(), AssignmentStatus.ACTIVE)
-                .map(a -> a.getSupervisor() != null && a.getSupervisor().getUser() != null
-                        ? a.getSupervisor().getUser().getId() : null)
+                .map(a -> a.getSupervisorUser() != null
+                        ? a.getSupervisorUser().getId()
+                        : a.getSupervisor() != null && a.getSupervisor().getUser() != null
+                                ? a.getSupervisor().getUser().getId() : null)
                 .ifPresentOrElse(
                         supervisorUserId -> eventPublisher.publishEvent(new PaymentApprovedEvent(
                                 financeCaseId, financeCase.getReference(), supervisorUserId,
@@ -411,8 +428,10 @@ public class FinanceService {
 
     @Transactional
     public FinanceCaseResponse reject(UUID financeCaseId, PaymentDecisionRequest request, UserPrincipal actor) {
-        Employee decider = requireFinanceEmployee(actor);
+        Employee decider = requireDecider(actor);
         FinanceCase financeCase = findMutableCaseOrThrow(financeCaseId);
+        assertSupervisorScope(financeCase, actor);
+        assertPaymentEligible(financeCase);
         if (request == null || request.comment() == null || request.comment().isBlank()) {
             throw new BusinessRuleException("REJECTION_REASON_REQUIRED",
                     "Rejecting a finance case requires a comment explaining the reason.");
@@ -437,6 +456,95 @@ public class FinanceService {
                 actor.getId(), null);
         log.info("Finance case rejected: ref={} actor={}", financeCase.getReference(), actor.getId());
         return toResponse(financeCase);
+    }
+
+    // ------------------------------------------------------------------
+    // S7 validation receipt (AGENTS.md §5.11 steps 5-6)
+    // ------------------------------------------------------------------
+
+    /**
+     * Issues the §5.11 payment receipt for a VALIDATED internship — WITHOUT the
+     * finance-case approval flow (no dossier, no certificate precondition: the
+     * receipt comes first in Scenario A). Idempotent twice over: an existing
+     * receipt is returned as-is (no duplicate even without a key), and
+     * concurrent double submits share one {@code X-Idempotency-Key} scope.
+     * Amount and currency come exclusively from the financial model
+     * ({@code PaymentCalculationService}, same config as the case flow — A7).
+     * The internship status move to RECEIPT_ISSUED is the validation
+     * service's job (single authority, S6b).
+     */
+    @Transactional
+    public tn.steg.backend.finance.application.dto.ValidationReceiptView generateValidationReceipt(
+            UUID internshipId, UserPrincipal actor) {
+        return idempotencyService.execute(actor.getId(),
+                IdempotencyService.currentKey().orElse(null),
+                () -> doGenerateValidationReceipt(internshipId, actor),
+                tn.steg.backend.finance.application.dto.ValidationReceiptView.class);
+    }
+
+    private tn.steg.backend.finance.application.dto.ValidationReceiptView doGenerateValidationReceipt(
+            UUID internshipId, UserPrincipal actor) {
+        Employee issuer = requireDecider(actor);
+        Internship internship = internshipRepository.findById(internshipId)
+                .orElseThrow(() -> new ResourceNotFoundException("Internship not found: " + internshipId));
+        if (internship.getStatus() != InternshipStatus.VALIDATED
+                && internship.getStatus() != InternshipStatus.RECEIPT_ISSUED) {
+            throw new tn.steg.backend.common.domain.exception.ConflictException("INTERNSHIP_NOT_VALIDATED",
+                    "Payment receipts require a VALIDATED internship. Current: " + internship.getStatus());
+        }
+        if (!eligibilityService.isPaymentEligible(internship)) {
+            throw new BusinessRuleException("INTERNSHIP_NOT_PAYABLE",
+                    "Receipts may only be issued for eligible obligatory internships. Requirement: "
+                            + internship.getRequirement());
+        }
+
+        FinanceCase financeCase = financeCaseRepository.findByInternshipId(internshipId)
+                .orElseGet(() -> {
+                    FinanceCase created = financeCaseRepository.save(
+                            new FinanceCase(nextCaseReference(), internship));
+                    storeCalculationSnapshot(created, internship);
+                    auditService.log("FINANCE_CASE_OPENED", "FinanceCase", created.getId(),
+                            null, Map.of("reference", created.getReference(),
+                                    "origin", "VALIDATION_RECEIPT"),
+                            actor.getId(), null);
+                    return created;
+                });
+
+        Optional<PaymentReceipt> existing = receiptRepository.findByFinanceCaseId(financeCase.getId());
+        if (existing.isPresent()) {
+            PaymentReceipt found = existing.get();
+            return new tn.steg.backend.finance.application.dto.ValidationReceiptView(
+                    found.getReference(), found.getAmount(), found.getCurrencyCode(),
+                    financeCase.getId().toString());
+        }
+
+        PaymentCalculationResult calculated = calculateFor(internship);
+        List<PaymentCalculation> history =
+                calculationRepository.findAllByFinanceCaseIdOrderByCalculationSequenceAsc(financeCase.getId());
+        int sequence = history.isEmpty() ? 1 : history.get(history.size() - 1).getCalculationSequence() + 1;
+        PaymentCalculation calculation = calculationRepository.save(new PaymentCalculation(
+                financeCase, calculated.completedMonths(), calculated.payableMonths(),
+                calculated.ratePerMonth(), calculated.calculatedAmount(), calculated.cappedAmount(),
+                calculated.capApplied(), calculated.currencyCode(), sequence));
+
+        PaymentReceipt receipt = issueOrReuseReceipt(financeCase, calculation, issuer, actor);
+        return new tn.steg.backend.finance.application.dto.ValidationReceiptView(
+                receipt.getReference(), receipt.getAmount(), receipt.getCurrencyCode(),
+                financeCase.getId().toString());
+    }
+
+    /**
+     * S7 validation detail: the receipt issued for this internship, if any.
+     * Follows the finance-case link (one case per internship at most).
+     */
+    @Transactional(readOnly = true)
+    public Optional<tn.steg.backend.finance.application.dto.ValidationReceiptView> findValidationReceipt(
+            UUID internshipId) {
+        return financeCaseRepository.findByInternshipId(internshipId)
+                .flatMap(caze -> receiptRepository.findByFinanceCaseId(caze.getId()))
+                .map(receipt -> new tn.steg.backend.finance.application.dto.ValidationReceiptView(
+                        receipt.getReference(), receipt.getAmount(), receipt.getCurrencyCode(),
+                        receipt.getFinanceCase().getId().toString()));
     }
 
     // ------------------------------------------------------------------
@@ -487,32 +595,68 @@ public class FinanceService {
     }
 
     private void requireFinanceStaff(UserPrincipal actor) {
-        if (!actor.hasRole("FINANCE") && !actor.hasRole("ADMIN")) {
-            throw new AccessDeniedException("Finance staff role (FINANCE or ADMIN) is required.");
+        if (!actor.hasRole("ADMIN") && !actor.hasRole("SUPERVISOR")) {
+            throw new AccessDeniedException("Receipt management requires the ADMIN or SUPERVISOR role.");
+        }
+    }
+
+    private void requireAdmin(UserPrincipal actor) {
+        if (!actor.hasRole("ADMIN")) {
+            throw new AccessDeniedException("This operation requires the ADMIN role.");
         }
     }
 
     /**
-     * The human payment authority: an Employee holding the FINANCE role.
-     * ADMIN alone is deliberately insufficient — the spec reserves approval
-     * for Finance, and AI (Phase A12) has no path here at all.
+     * The human payment authority: an Employee holding ADMIN or SUPERVISOR role.
+     * A SUPERVISOR may only decide cases for internships they actively supervise
+     * (checked per case); ADMIN decides any case. AI has no path here at all.
      */
-    private Employee requireFinanceEmployee(UserPrincipal actor) {
-        if (!actor.hasRole("FINANCE")) {
-            throw new AccessDeniedException("Payment approval requires the FINANCE role.");
+    private Employee requireDecider(UserPrincipal actor) {
+        if (!actor.hasRole("ADMIN") && !actor.hasRole("SUPERVISOR")) {
+            throw new AccessDeniedException("Payment decisions require the ADMIN or SUPERVISOR role.");
         }
         return employeeRepository.findByUserId(actor.getId())
-                .orElseThrow(() -> new AccessDeniedException("A linked finance employee profile is required."));
+                .orElseThrow(() -> new AccessDeniedException("A linked employee profile is required."));
+    }
+
+    /**
+     * Supervisors act only on their assigned internships; ADMIN is unscoped.
+     * Called on every supervisor-reachable case operation so hidden-client
+     * requests are rejected server-side, not merely hidden in the UI.
+     */
+    private void assertSupervisorScope(FinanceCase financeCase, UserPrincipal actor) {
+        if (actor.hasRole("ADMIN")) {
+            return;
+        }
+        UUID internshipId = financeCase.getInternship() != null ? financeCase.getInternship().getId() : null;
+        boolean assigned = internshipId != null && assignmentRepository
+                .findBySupervisorUserIdAndStatus(actor.getId(), AssignmentStatus.ACTIVE).stream()
+                .anyMatch(a -> a.getInternship() != null && internshipId.equals(a.getInternship().getId()));
+        if (!assigned) {
+            throw new AccessDeniedException("Supervisors may only act on their assigned internships.");
+        }
+    }
+
+    /** Receipts exist only for eligible obligatory internships — re-checked at decision time. */
+    private void assertPaymentEligible(FinanceCase financeCase) {
+        Internship internship = financeCase.getInternship();
+        if (internship == null || !eligibilityService.isPaymentEligible(internship)) {
+            throw new BusinessRuleException("INTERNSHIP_NOT_PAYABLE",
+                    "Receipts may only be issued for eligible obligatory internships. Requirement: "
+                            + (internship != null ? internship.getRequirement() : "unknown"));
+        }
     }
 
     private void assertCanDownloadReceipt(FinanceCase financeCase, UserPrincipal actor) {
-        if (actor.hasRole("ADMIN") || actor.hasRole("FINANCE") || actor.hasRole("HR")) {
+        if (actor.hasRole("ADMIN")) {
             return;
         }
         boolean supervisor = assignmentRepository.findByInternshipIdAndStatus(
                         financeCase.getInternship().getId(), AssignmentStatus.ACTIVE)
-                .map(a -> a.getSupervisor() != null && a.getSupervisor().getUser() != null
-                        && a.getSupervisor().getUser().getId().equals(actor.getId()))
+                .map(a -> a.getSupervisorUser() != null
+                        ? a.getSupervisorUser().getId().equals(actor.getId())
+                        : a.getSupervisor() != null && a.getSupervisor().getUser() != null
+                                && a.getSupervisor().getUser().getId().equals(actor.getId()))
                 .orElse(false);
         if (!supervisor) {
             throw new AccessDeniedException("You are not authorized to download this payment receipt.");
@@ -573,6 +717,36 @@ public class FinanceService {
                         link.getDocument().getType() == required
                                 && link.getVerificationStatus()
                                 == tn.steg.backend.document.domain.model.DocumentVerificationStatus.VERIFIED));
+    }
+
+    /**
+     * Pre-check (a): the ONE receipt-issuing core. Every payment receipt in
+     * the system is created here — both the S7 validation receipt (from a
+     * VALIDATED internship, no dossier/certificate/approval preconditions) and
+     * the finance-case approval receipt. An existing receipt for the case is
+     * returned as-is, so no flow can ever mint a second receipt for the same
+     * case, with or without an idempotency key.
+     */
+    private PaymentReceipt issueOrReuseReceipt(FinanceCase financeCase, PaymentCalculation calculation,
+                                               Employee issuer, UserPrincipal actor) {
+        Optional<PaymentReceipt> existing = receiptRepository.findByFinanceCaseId(financeCase.getId());
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        // Pre-check (a) — NO RECEIPT BEFORE VALIDATION. This is the one core that
+        // mints receipts, so the §4 gate lives HERE, structurally, and not only in
+        // each caller's preconditions: a receipt is created only for a VALIDATED
+        // internship (RECEIPT_ISSUED = already validated, receipt reused below).
+        // Any caller — the S7 validation receipt, the finance-case approval, or a
+        // future path — is refused with a clear 409 otherwise.
+        Internship gatedInternship = financeCase.getInternship();
+        if (gatedInternship.getStatus() != InternshipStatus.VALIDATED
+                && gatedInternship.getStatus() != InternshipStatus.RECEIPT_ISSUED) {
+            throw new tn.steg.backend.common.domain.exception.ConflictException("RECEIPT_BEFORE_VALIDATION",
+                    "A payment receipt can only be issued for a VALIDATED internship. Current: "
+                            + gatedInternship.getStatus());
+        }
+        return issueReceipt(financeCase, calculation, issuer, actor);
     }
 
     private PaymentReceipt issueReceipt(FinanceCase financeCase, PaymentCalculation calculation,
@@ -708,8 +882,7 @@ public class FinanceService {
 
     private void createLinkedDocument(FileAsset fileAsset, DocumentType type) {
         int year = Year.now().getValue();
-        String prefix = "DOC-" + year + "-";
-        String reference = String.format("%s%05d", prefix, documentRepository.countByReferencePrefix(prefix) + 1);
+        String reference = String.format("DOC-%d-%05d", year, documentRepository.nextReferenceSequence());
         Document document = documentRepository.save(new Document(reference, type));
         documentVersionRepository.save(new DocumentVersion(
                 document, fileAsset, 1, fileAsset.getOriginalFileName(), fileAsset.getChecksum()));
@@ -717,26 +890,12 @@ public class FinanceService {
 
     private String nextCaseReference() {
         int year = Year.now().getValue();
-        String base = "FC-" + year + "-";
-        long sequence = financeCaseRepository.countByReferencePrefix(base) + 1;
-        String reference;
-        do {
-            reference = String.format("%s%05d", base, sequence);
-            sequence++;
-        } while (financeCaseRepository.existsByReference(reference));
-        return reference;
+        return String.format("FC-%d-%05d", year, financeCaseRepository.nextReferenceSequence());
     }
 
     private String nextReceiptReference() {
         int year = Year.now().getValue();
-        String base = "PAY-" + year + "-";
-        long sequence = receiptRepository.countByReferencePrefix(base) + 1;
-        String reference;
-        do {
-            reference = String.format("%s%05d", base, sequence);
-            sequence++;
-        } while (receiptRepository.existsByReference(reference));
-        return reference;
+        return String.format("PAY-%d-%05d", year, receiptRepository.nextReferenceSequence());
     }
 
     private String sha256Hex(byte[] bytes) {

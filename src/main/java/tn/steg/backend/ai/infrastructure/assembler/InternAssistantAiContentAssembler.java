@@ -10,8 +10,10 @@ import tn.steg.backend.ai.domain.assembler.InternAssistantContentAssembler;
 import tn.steg.backend.ai.domain.knowledge.StegKnowledgeBase;
 import tn.steg.backend.ai.domain.knowledge.StegKnowledgeBase.Entry;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
+import tn.steg.backend.internship.domain.model.AssignmentStatus;
 import tn.steg.backend.internship.domain.model.Internship;
 import tn.steg.backend.internship.domain.model.InternshipStatus;
+import tn.steg.backend.internship.domain.repository.InternshipAssignmentRepository;
 import tn.steg.backend.internship.domain.repository.InternshipRepository;
 
 /**
@@ -27,17 +29,32 @@ import tn.steg.backend.internship.domain.repository.InternshipRepository;
 public class InternAssistantAiContentAssembler implements InternAssistantContentAssembler {
 
     private final InternshipRepository internshipRepository;
+    private final InternshipAssignmentRepository assignmentRepository;
     private final StegKnowledgeBase knowledgeBase;
 
     @Override
     public AssembledAiContent assemble(UUID userId, String userQuestion) {
         List<Internship> active =
-                internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.ACTIVE);
+                internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.IN_PROGRESS);
         Internship internship = active.stream().findFirst().orElse(null);
+        String contextLabel = "stagiaire";
         if (internship == null) {
             List<Internship> all = internshipRepository.findByCandidateId(userId);
-            internship = all.stream().findFirst().orElseThrow(
-                    () -> new ResourceNotFoundException("No internship found for user: " + userId));
+            internship = all.stream().findFirst().orElse(null);
+        }
+        if (internship == null) {
+            // Supervisor without a candidate row: fall back to ACTIVE supervised
+            // internships (assigned-only scope enforced here, never global).
+            internship = assignmentRepository.findBySupervisorUserIdAndStatus(userId, AssignmentStatus.ACTIVE)
+                    .stream()
+                    .map(a -> a.getInternship())
+                    .filter(i -> i != null)
+                    .findFirst()
+                    .orElse(null);
+            contextLabel = "superviseur";
+        }
+        if (internship == null) {
+            throw new ResourceNotFoundException("No internship found for user: " + userId);
         }
 
         List<Entry> entries = knowledgeBase.retrieve(userQuestion);
@@ -56,12 +73,12 @@ public class InternAssistantAiContentAssembler implements InternAssistantContent
                 """;
 
         List<String> promptParts = new ArrayList<>();
-        promptParts.add("Contexte stage — Réf: " + internship.getReference()
+        promptParts.add("Contexte stage (" + contextLabel + ") — Réf: " + internship.getReference()
                 + " | Type: " + internship.getType()
                 + " | Statut: " + internship.getStatus()
                 + " | Période: " + internship.getStartDate() + " → " + internship.getEndDate());
         promptParts.add(StegKnowledgeBase.renderContext(entries));
-        promptParts.add("Question du stagiaire:\n" + userQuestion);
+        promptParts.add("Question du " + contextLabel + ":\n" + userQuestion);
 
         String inputSummary = String.format("InternAssistant user=%s internship=%s kbEntries=%d questionLength=%d",
                 userId, internship.getId(), entries.size(), userQuestion != null ? userQuestion.length() : 0);

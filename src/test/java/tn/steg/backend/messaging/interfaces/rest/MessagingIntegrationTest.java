@@ -130,7 +130,7 @@ class MessagingIntegrationTest {
                 .build();
 
         hrUser = userRepository.saveAndFlush(new User("hr_msg@steg.com", "hash", UserStatus.ACTIVE));
-        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         supervisorUser = userRepository.saveAndFlush(new User("sup_msg@steg.com", "hash", UserStatus.ACTIVE));
         supervisorToken = jwtService.generateAccessToken(supervisorUser.getId(), supervisorUser.getEmail(), List.of("ROLE_SUPERVISOR"));
@@ -164,7 +164,7 @@ class MessagingIntegrationTest {
         secondInternCandidate.setNationalIdEncrypted("55443322");
         secondInternCandidate = candidateRepository.saveAndFlush(secondInternCandidate);
 
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         InternshipResponse created = internshipService.createManual(new InternshipCreateManualRequest(
                 internCandidate.getId(),
@@ -758,7 +758,7 @@ class MessagingIntegrationTest {
         emp2.setUser(sup2);
         emp2 = employeeRepository.saveAndFlush(emp2);
 
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
         internshipService.assign(internship.getId(), new InternshipAssignmentRequest(
                 dept2.getId(), emp2.getId(), LocalDate.now().minusDays(9), LocalDate.now().plusDays(60), "reassign"), hrPrincipal);
 
@@ -791,7 +791,7 @@ class MessagingIntegrationTest {
     @Test
     @DisplayName("Completed interns keep history but cannot join new groups")
     void completedInternBlockedFromNewGroupsButKeepsHistory() throws Exception {
-        internship.setStatus(InternshipStatus.COMPLETED);
+        internship.setStatus(InternshipStatus.VALIDATED);
         ((tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository).save(internship);
 
         // Existing private history still readable

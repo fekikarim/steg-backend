@@ -14,16 +14,25 @@ import java.util.UUID;
  * persistence context).
  */
 public sealed interface DomainEvent
-        permits ApplicationAcceptedEvent,
+        permits        ApplicationAcceptedEvent,
+        ApplicationModificationRequestedEvent,
         ApplicationRejectedEvent,
+        ApplicationResubmittedEvent,
         ApplicationSubmittedEvent,
         InternshipAssignedEvent,
+        InternshipReportSubmittedEvent,
+        DocumentRejectedEvent,
+        InternshipCompletedEvent,
+        InternshipStatusChangedEvent,
+        FinalEvaluationRequiredEvent,
         DocumentVerifiedEvent,
         TaskAssignedEvent,
+        TaskStatusChangedEvent,
         JournalEntryValidatedEvent,
         NewPrivateMessageEvent,
         PaymentApprovedEvent,
-        CertificateAvailableEvent {
+        CertificateAvailableEvent,
+        CandidateValidatedEvent {
 
     /** Unique id of this event occurrence (idempotency/tracing). */
     UUID eventId();

@@ -49,9 +49,6 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
     private static final java.util.Set<String> STAFF_ROLES = java.util.Set.of(
             "ROLE_ADMIN",
-            "ROLE_HR",
-            "ROLE_FINANCE",
-            "ROLE_DIRECTOR",
             "ROLE_SUPERVISOR"
     );
 

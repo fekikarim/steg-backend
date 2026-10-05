@@ -49,7 +49,7 @@ public record ApplicationResponse(
         @Schema(description = "Rejection reason (only present when REJECTED)")
         String rejectionReason,
 
-        @Schema(description = "Correction comment (only present when NEEDS_CORRECTION)")
+        @Schema(description = "Correction comment (only present when MODIFICATION_REQUESTED)")
         String correctionComment,
 
         @Schema(description = "Reviewer employee UUID")

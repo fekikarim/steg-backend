@@ -8,11 +8,15 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import tn.steg.backend.common.domain.event.InternshipReportSubmittedEvent;
 import tn.steg.backend.common.domain.event.JournalEntryValidatedEvent;
 import tn.steg.backend.common.domain.event.TaskAssignedEvent;
+import tn.steg.backend.common.domain.event.TaskStatusChangedEvent;
+import tn.steg.backend.common.application.idempotency.IdempotencyService;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.common.domain.util.NullSafe;
 import tn.steg.backend.companion.application.dto.*;
 import tn.steg.backend.companion.domain.model.*;
 import tn.steg.backend.companion.domain.repository.DeliverableRepository;
@@ -21,6 +25,7 @@ import tn.steg.backend.companion.domain.repository.InternshipJournalRepository;
 import tn.steg.backend.companion.domain.repository.JournalEntryRepository;
 import tn.steg.backend.companion.domain.repository.TaskRepository;
 import tn.steg.backend.audit.application.AuditService;
+import tn.steg.backend.audit.domain.model.AuditSource;
 import tn.steg.backend.document.application.DocumentService;
 import tn.steg.backend.document.domain.model.DocumentType;
 import tn.steg.backend.document.domain.model.FileAsset;
@@ -35,6 +40,8 @@ import tn.steg.backend.internship.domain.model.Internship;
 import tn.steg.backend.internship.domain.model.InternshipAssignment;
 import tn.steg.backend.internship.domain.repository.InternshipAssignmentRepository;
 import tn.steg.backend.internship.domain.repository.InternshipRepository;
+import tn.steg.backend.internship.application.SupervisionScopeService;
+import tn.steg.backend.internship.application.InternshipLifecycleService;
 import tn.steg.backend.organization.domain.model.Employee;
 import tn.steg.backend.organization.domain.repository.EmployeeRepository;
 
@@ -43,6 +50,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
 import java.util.Map;
@@ -66,9 +74,26 @@ public class CompanionService {
     private final DocumentValidationService documentValidationService;
     private final MalwareScanner malwareScanner;
     private final AuditService auditService;
+    private final SupervisionScopeService supervisionScopeService;
+    private final InternshipLifecycleService internshipLifecycleService;
+    private final IdempotencyService idempotencyService;
 
     /** Business facts for cross-cutting concerns; never a dependency on consumers (Phase A10). */
     private final ApplicationEventPublisher eventPublisher;
+
+    /**
+     * S9 audit channel (§8.2) for intern-initiated writes: these endpoints
+     * admit ADMIN or the owning intern only, so a non-admin actor IS the
+     * mobile intern (MOBILE), anything else is BACK_OFFICE. Supervisor/admin
+     * validations and task writes keep the default.
+     */
+    private void audit(String action, String entityType, UUID id,
+                       Object oldValues, Object newValues, UserPrincipal actor) {
+        AuditSource source = actor != null && actor.hasRole("ADMIN")
+                ? AuditSource.BACK_OFFICE : AuditSource.MOBILE;
+        auditService.log(action, entityType, id, oldValues, newValues,
+                actor != null ? actor.getId() : null, null, null, null, source);
+    }
 
     // -------------------------------------------------------------------------
     // Tasks
@@ -77,6 +102,9 @@ public class CompanionService {
     @Transactional
     public TaskResponse createTask(UUID internshipId, TaskRequest request, UserPrincipal actor) {
         Internship internship = findInternshipOrThrow(internshipId);
+        if (actor != null && !supervisionScopeService.canManage(actor, internshipId) && !isInternOfInternship(internship, actor)) {
+            throw new ResourceNotFoundException("Internship not found: " + internshipId);
+        }
         User creator = findUserOrThrow(actor.getId());
 
         User assignedTo = null;
@@ -94,13 +122,14 @@ public class CompanionService {
             }
         }
 
-        task = taskRepository.save(task);
+        task = taskRepository.saveTask(task);
         log.info("Task created: id={}, internship={}, creator={}", task.getId(), internshipId, creator.getId());
-        // E2: Map.of forbids nulls — unassigned tasks carry a null assignedToId.
-        java.util.Map<String, Object> taskAudit = new java.util.LinkedHashMap<>();
-        taskAudit.put("internshipId", internshipId);
-        taskAudit.put("title", task.getTitle());
-        taskAudit.put("assignedToId", assignedTo != null ? assignedTo.getId() : null);
+        // E2: Map.of forbids nulls — unassigned tasks carry a null assignedToId,
+        // so the audit detail uses the null-safe shared builder.
+        Map<String, Object> taskAudit = NullSafe.mapOf(
+                "internshipId", internshipId,
+                "title", task.getTitle(),
+                "assignedToId", assignedTo != null ? assignedTo.getId() : null);
         auditService.log("COMPANION_TASK_CREATED", "Task", task.getId(), null,
                 taskAudit, actor.getId(), null);
 
@@ -113,18 +142,60 @@ public class CompanionService {
     }
 
     @Transactional(readOnly = true)
-    public Page<TaskResponse> listTasks(UUID internshipId, TaskStatus status, Pageable pageable) {
-        findInternshipOrThrow(internshipId);
+    public Page<TaskResponse> listTasks(UUID internshipId, TaskStatus status, Pageable pageable, UserPrincipal actor) {
+        Internship internship = findInternshipOrThrow(internshipId);
+        if (actor != null && !supervisionScopeService.canManage(actor, internshipId) && !isInternOfInternship(internship, actor)) {
+            throw new ResourceNotFoundException("Internship not found: " + internshipId);
+        }
         Page<Task> page = (status != null)
                 ? taskRepository.findByInternshipIdAndStatus(internshipId, status, pageable)
                 : taskRepository.findByInternshipId(internshipId, pageable);
         return page.map(TaskResponse::from);
     }
 
+    @Transactional(readOnly = true)
+    public Page<TaskResponse> listTasks(UUID internshipId, TaskStatus status, Pageable pageable) {
+        return listTasks(internshipId, status, pageable, null);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<TaskResponse> listAllTasks(TaskStatus status, Pageable pageable, UserPrincipal actor) {
+        if (supervisionScopeService.hasGlobalAccess(actor)) {
+            Page<Task> page = (status != null)
+                    ? taskRepository.findByStatus(status, pageable)
+                    : taskRepository.findAll(pageable);
+            return page.map(TaskResponse::from);
+        }
+        List<Internship> assigned = supervisionScopeService.assignedInternships(actor);
+        if (assigned == null || assigned.isEmpty()) {
+            return Page.empty(pageable);
+        }
+        List<UUID> internshipIds = assigned.stream().map(Internship::getId).toList();
+        Page<Task> page = (status != null)
+                ? taskRepository.findByInternshipIdInAndStatus(internshipIds, status, pageable)
+                : taskRepository.findByInternshipIdIn(internshipIds, pageable);
+        return page.map(TaskResponse::from);
+    }
+
+    @Transactional(readOnly = true)
+    public TaskResponse getTask(UUID taskId, UserPrincipal actor) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
+        UUID internshipId = task.getInternship() != null ? task.getInternship().getId() : null;
+        if (actor != null && !supervisionScopeService.canManage(actor, internshipId) && !isInternOfTask(task, actor)) {
+            throw new ResourceNotFoundException("Task not found: " + taskId);
+        }
+        return TaskResponse.from(task);
+    }
+
     @Transactional
     public TaskResponse updateTask(UUID taskId, TaskRequest request, UserPrincipal actor) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
+        UUID internshipId = task.getInternship() != null ? task.getInternship().getId() : null;
+        if (actor != null && !supervisionScopeService.canManage(actor, internshipId) && !isInternOfTask(task, actor)) {
+            throw new ResourceNotFoundException("Task not found: " + taskId);
+        }
 
         if (request.title() != null && !request.title().isBlank()) {
             task.setTitle(request.title());
@@ -147,11 +218,15 @@ public class CompanionService {
             }
         }
 
-        task = taskRepository.save(task);
+        task = taskRepository.saveTask(task);
+        // Map.of forbids nulls — unassigned tasks carry a null assignedToId.
+        java.util.Map<String, Object> updateAudit = new java.util.LinkedHashMap<>();
+        updateAudit.put("title", task.getTitle());
+        updateAudit.put("status", task.getStatus());
+        updateAudit.put("assignedToId", task.getAssignedTo() != null ? task.getAssignedTo().getId() : null);
         auditService.log("COMPANION_TASK_UPDATED", "Task", task.getId(),
                 Map.of("title", task.getTitle(), "status", task.getStatus()),
-                Map.of("title", task.getTitle(), "status", task.getStatus(),
-                        "assignedToId", task.getAssignedTo() != null ? task.getAssignedTo().getId() : null),
+                updateAudit,
                 actor.getId(), null);
         return TaskResponse.from(task);
     }
@@ -160,6 +235,10 @@ public class CompanionService {
     public TaskResponse updateTaskStatus(UUID taskId, TaskStatus status, UserPrincipal actor) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
+        UUID internshipId = task.getInternship() != null ? task.getInternship().getId() : null;
+        if (actor != null && !supervisionScopeService.canManage(actor, internshipId) && !isInternOfTask(task, actor)) {
+            throw new ResourceNotFoundException("Task not found: " + taskId);
+        }
 
         task.setStatus(status);
         if (status == TaskStatus.COMPLETED) {
@@ -168,14 +247,153 @@ public class CompanionService {
             task.setCompletedAt(null);
         }
 
-        task = taskRepository.save(task);
+        task = taskRepository.saveTask(task);
         // E2: completedAt is null for non-COMPLETED statuses — Map.of forbids nulls.
         java.util.Map<String, Object> statusAudit = new java.util.LinkedHashMap<>();
         statusAudit.put("status", status);
         statusAudit.put("completedAt", task.getCompletedAt());
         auditService.log("COMPANION_TASK_STATUS_CHANGED", "Task", taskId, null,
                 statusAudit, actor.getId(), null);
+        publishTaskStatusChanged(task, actor);
         return TaskResponse.from(task);
+    }
+
+    @Transactional
+    public TaskResponse reviewTask(UUID taskId, ValidationRequest request, UserPrincipal actor) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
+        UUID internshipId = task.getInternship() != null ? task.getInternship().getId() : null;
+        if (!supervisionScopeService.canManage(actor, internshipId)) {
+            throw new ResourceNotFoundException("Task not found: " + taskId);
+        }
+        if (task.getStatus() != TaskStatus.COMPLETED) {
+            throw new BusinessRuleException("TASK_NOT_COMPLETED", "Only completed tasks can be reviewed.");
+        }
+        if (!request.approve() && (request.comment() == null || request.comment().isBlank())) {
+            throw new BusinessRuleException("REVIEW_REASON_REQUIRED", "A denial reason is required.");
+        }
+        task.setStatus(request.approve() ? TaskStatus.APPROVED : TaskStatus.DENIED);
+        task.setReviewReason(request.approve() ? null : request.comment().trim());
+        task.setReviewedBy(findUserOrThrow(actor.getId()));
+        task.setReviewedAt(Instant.now());
+        task = taskRepository.saveTask(task);
+        auditService.log(request.approve() ? "TASK_APPROVED" : "TASK_DENIED", "Task", taskId,
+                null, Map.of("status", task.getStatus(), "reason", task.getReviewReason() == null ? "" : task.getReviewReason()),
+                actor.getId(), null);
+        publishTaskStatusChanged(task, actor);
+        return TaskResponse.from(task);
+    }
+
+    @Transactional
+    public BulkTaskResponse bulkTasks(List<BulkTaskMutation> mutations, UserPrincipal actor) {
+        return idempotencyService.execute(actor.getId(), IdempotencyService.currentKey().orElse(null),
+                () -> executeBulkTasks(mutations, actor), BulkTaskResponse.class);
+    }
+
+    private BulkTaskResponse executeBulkTasks(List<BulkTaskMutation> mutations, UserPrincipal actor) {
+        if (mutations == null || mutations.isEmpty()) {
+            throw new BusinessRuleException("BULK_TASKS_EMPTY", "At least one task mutation is required.");
+        }
+        if (mutations.size() > 100) {
+            throw new BusinessRuleException("BULK_TASKS_TOO_LARGE", "A bulk request cannot exceed 100 mutations.");
+        }
+
+        List<Task> existingTasks = mutations.stream()
+                .filter(mutation -> mutation.action() != BulkTaskAction.CREATE)
+                .map(mutation -> taskRepository.findById(mutation.taskId())
+                        .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + mutation.taskId())))
+                .toList();
+        for (Task task : existingTasks) {
+            if (!supervisionScopeService.canManage(actor, task.getInternship().getId())) {
+                throw new ResourceNotFoundException("Task not found: " + task.getId());
+            }
+        }
+        for (BulkTaskMutation mutation : mutations) {
+            if (mutation.action() == BulkTaskAction.CREATE) {
+                if (mutation.internshipId() == null || mutation.task() == null
+                        || mutation.task().title() == null || mutation.task().title().isBlank()) {
+                    throw new BusinessRuleException("BULK_TASK_INVALID", "CREATE requires internshipId and task title.");
+                }
+                if (!supervisionScopeService.hasGlobalAccess(actor)
+                        && !supervisionScopeService.isAssignedTo(actor, mutation.internshipId())) {
+                    throw new ResourceNotFoundException("Internship not found: " + mutation.internshipId());
+                }
+            }
+        }
+
+        List<TaskResponse> createdOrUpdated = new java.util.ArrayList<>();
+        List<BulkTaskItemResult> items = new java.util.ArrayList<>();
+        int deleted = 0;
+        for (int i = 0; i < mutations.size(); i++) {
+            BulkTaskMutation mutation = mutations.get(i);
+            if (mutation.action() == BulkTaskAction.CREATE) {
+                TaskResponse created = createTask(mutation.internshipId(), mutation.task(), actor);
+                createdOrUpdated.add(created);
+                items.add(new BulkTaskItemResult(i, mutation.action(), created.id(),
+                        mutation.internshipId(), "OK"));
+            } else {
+                Task task = taskRepository.findById(mutation.taskId()).orElseThrow();
+                if (mutation.action() == BulkTaskAction.UPDATE) {
+                    TaskResponse updated = updateTask(task.getId(), mutation.task(), actor);
+                    createdOrUpdated.add(updated);
+                    items.add(new BulkTaskItemResult(i, mutation.action(), updated.id(),
+                            updated.internshipId(), "OK"));
+                } else {
+                    UUID internshipId = task.getInternship() != null
+                            ? task.getInternship().getId() : null;
+                    UUID taskId = task.getId();
+                    taskRepository.delete(task);
+                    auditService.log("COMPANION_TASK_DELETED", "Task", taskId,
+                            Map.of("title", task.getTitle()), null, actor.getId(), null);
+                    deleted++;
+                    items.add(new BulkTaskItemResult(i, mutation.action(), taskId,
+                            internshipId, "OK"));
+                }
+            }
+        }
+        return new BulkTaskResponse(createdOrUpdated, deleted, List.copyOf(items));
+    }
+
+    /**
+     * S6c — deletes one task. Scoped like every other task write: an
+     * out-of-scope id is 404, never 403, so a supervisor cannot probe another
+     * supervisor's tasks.
+     */
+    @Transactional
+    public void deleteTask(UUID taskId, UserPrincipal actor) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
+        UUID internshipId = task.getInternship() != null ? task.getInternship().getId() : null;
+        if (!supervisionScopeService.canManage(actor, internshipId)) {
+            throw new ResourceNotFoundException("Task not found: " + taskId);
+        }
+        taskRepository.delete(task);
+        auditService.log("COMPANION_TASK_DELETED", "Task", taskId,
+                Map.of("title", task.getTitle()), null, actor.getId(), null);
+    }
+
+    private void publishTaskStatusChanged(Task task, UserPrincipal actor) {
+        UUID internshipId = task.getInternship().getId();
+        UUID supervisorUserId = supervisionScopeService.findSupervisorUserId(internshipId).orElse(null);
+        UUID internUserId = task.getInternship().getCandidate() != null
+                && task.getInternship().getCandidate().getUser() != null
+                ? task.getInternship().getCandidate().getUser().getId()
+                : null;
+        eventPublisher.publishEvent(new TaskStatusChangedEvent(
+                task.getId(), internshipId, task.getTitle(), task.getStatus(),
+                supervisorUserId, internUserId, actor.getId()));
+    }
+
+    private boolean isInternOfInternship(Internship internship, UserPrincipal actor) {
+        if (internship == null || actor == null) return false;
+        return internship.getCandidate() != null
+                && internship.getCandidate().getUser() != null
+                && actor.getId().equals(internship.getCandidate().getUser().getId());
+    }
+
+    private boolean isInternOfTask(Task task, UserPrincipal actor) {
+        if (task == null || actor == null) return false;
+        return isInternOfInternship(task.getInternship(), actor);
     }
 
     // -------------------------------------------------------------------------
@@ -229,8 +447,8 @@ public class CompanionService {
         entry.setSubmittedAt(Instant.now());
         entry = journalEntryRepository.save(entry);
         log.info("Journal entry submitted: id={}", entry.getId());
-        auditService.log("JOURNAL_ENTRY_SUBMITTED", "JournalEntry", entry.getId(), null,
-                Map.of("status", entry.getStatus(), "submittedAt", entry.getSubmittedAt()), actor.getId(), null);
+        audit("JOURNAL_ENTRY_SUBMITTED", "JournalEntry", entry.getId(), null,
+                Map.of("status", entry.getStatus(), "submittedAt", entry.getSubmittedAt()), actor);
         return JournalEntryResponse.from(entry);
     }
 
@@ -254,8 +472,7 @@ public class CompanionService {
         log.info("Journal entry validated: id={}, validatedBy={}", entry.getId(), supervisor != null ? supervisor.getId() : null);
         auditService.log("JOURNAL_ENTRY_VALIDATED", "JournalEntry", entry.getId(),
                 Map.of("status", JournalEntryStatus.SUBMITTED),
-                Map.of("status", JournalEntryStatus.VALIDATED,
-                        "validatedBy", supervisor != null ? supervisor.getId() : null),
+                reviewAudit(JournalEntryStatus.VALIDATED, null, supervisor),
                 actor.getId(), null);
 
         // Phase A10: notify the intern author (consumed AFTER_COMMIT).
@@ -285,9 +502,7 @@ public class CompanionService {
         log.info("Journal entry rejected: id={}, rejectedBy={}", entry.getId(), supervisor != null ? supervisor.getId() : null);
         auditService.log("JOURNAL_ENTRY_REJECTED", "JournalEntry", entry.getId(),
                 Map.of("status", JournalEntryStatus.SUBMITTED),
-                Map.of("status", JournalEntryStatus.REJECTED,
-                        "reason", request.comment(),
-                        "validatedBy", supervisor != null ? supervisor.getId() : null),
+                reviewAudit(JournalEntryStatus.REJECTED, request.comment(), supervisor),
                 actor.getId(), null);
         return JournalEntryResponse.from(entry);
     }
@@ -327,8 +542,8 @@ public class CompanionService {
         version = deliverableVersionRepository.save(version);
 
         log.info("Deliverable created: id={}, v1 fileAsset={}, uploader={}", deliverable.getId(), fileAsset.getId(), uploader.getId());
-        auditService.log("DELIVERABLE_CREATED", "Deliverable", deliverable.getId(), null,
-                Map.of("internshipId", internshipId, "title", title, "currentVersion", 1), actor.getId(), null);
+        audit("DELIVERABLE_CREATED", "Deliverable", deliverable.getId(), null,
+                Map.of("internshipId", internshipId, "title", title, "currentVersion", 1), actor);
         return toDeliverableResponse(deliverable);
     }
 
@@ -356,9 +571,9 @@ public class CompanionService {
         java.util.Map<String, Object> versionAudit = new java.util.LinkedHashMap<>();
         versionAudit.put("currentVersion", nextVersion);
         versionAudit.put("changeSummary", changeSummary);
-        auditService.log("DELIVERABLE_VERSION_UPLOADED", "Deliverable", deliverableId,
+        audit("DELIVERABLE_VERSION_UPLOADED", "Deliverable", deliverableId,
                 Map.of("currentVersion", nextVersion - 1),
-                versionAudit, actor.getId(), null);
+                versionAudit, actor);
         return toDeliverableResponse(deliverable);
     }
 
@@ -385,9 +600,33 @@ public class CompanionService {
         deliverable.setSubmittedAt(Instant.now());
         deliverable = deliverableRepository.save(deliverable);
         log.info("Deliverable submitted: id={}", deliverableId);
-        auditService.log("DELIVERABLE_SUBMITTED", "Deliverable", deliverableId, null,
-                Map.of("status", DeliverableStatus.SUBMITTED, "submittedAt", deliverable.getSubmittedAt()), actor.getId(), null);
+        audit("DELIVERABLE_SUBMITTED", "Deliverable", deliverableId, null,
+                Map.of("status", DeliverableStatus.SUBMITTED, "submittedAt", deliverable.getSubmittedAt()), actor);
+        advanceToReportSubmittedOnFirstSubmission(deliverable, actor);
         return toDeliverableResponse(deliverable);
+    }
+
+    /**
+     * S7a.1 (assumption A8): the deliverables channel IS the report/journal
+     * submission step. The first submission while the internship is IN_PROGRESS
+     * moves it to REPORT_SUBMITTED through the single authority (supervisor +
+     * intern are notified by the lifecycle event itself) and fans out to the
+     * Admin role, which owns the validation queue. Later submissions (already
+     * REPORT_SUBMITTED or beyond, e.g. resubmission after a REJECTED decision)
+     * change nothing — no error, no duplicate transition.
+     */
+    private void advanceToReportSubmittedOnFirstSubmission(
+            tn.steg.backend.companion.domain.model.Deliverable deliverable, UserPrincipal actor) {
+        Internship internship = deliverable.getInternship();
+        if (internship == null
+                || internship.getStatus() != tn.steg.backend.internship.domain.model.InternshipStatus.IN_PROGRESS) {
+            return;
+        }
+        internshipLifecycleService.transition(internship.getId(),
+                tn.steg.backend.internship.domain.model.InternshipStatus.REPORT_SUBMITTED,
+                "Report submitted by " + actor.getEmail(), actor);
+        eventPublisher.publishEvent(new InternshipReportSubmittedEvent(
+                internship.getId(), internship.getReference(), deliverable.getId(), actor.getId()));
     }
 
     @Transactional
@@ -409,8 +648,7 @@ public class CompanionService {
         log.info("Deliverable validated: id={}, validatedBy={}", deliverableId, supervisor != null ? supervisor.getId() : null);
         auditService.log("DELIVERABLE_VALIDATED", "Deliverable", deliverableId,
                 Map.of("status", DeliverableStatus.SUBMITTED),
-                Map.of("status", DeliverableStatus.VALIDATED,
-                        "validatedBy", supervisor != null ? supervisor.getId() : null), actor.getId(), null);
+                reviewAudit(DeliverableStatus.VALIDATED, null, supervisor), actor.getId(), null);
         return toDeliverableResponse(deliverable);
     }
 
@@ -433,9 +671,7 @@ public class CompanionService {
         log.info("Deliverable rejected: id={}, rejectedBy={}", deliverableId, supervisor != null ? supervisor.getId() : null);
         auditService.log("DELIVERABLE_REJECTED", "Deliverable", deliverableId,
                 Map.of("status", DeliverableStatus.SUBMITTED),
-                Map.of("status", DeliverableStatus.REJECTED,
-                        "reason", request.comment(),
-                        "validatedBy", supervisor != null ? supervisor.getId() : null), actor.getId(), null);
+                reviewAudit(DeliverableStatus.REJECTED, request.comment(), supervisor), actor.getId(), null);
         return toDeliverableResponse(deliverable);
     }
 
@@ -491,6 +727,20 @@ public class CompanionService {
         }
 
         return employeeRepository.findByUserId(actor.getId()).orElse(null);
+    }
+
+    /**
+     * Null-safe review audit payload: the supervisor has no Employee row when
+     * a user-backed supervisor (e.g. a seeded demo account) validates, and
+     * {@code Map.of} throws on null values. Omits absent keys instead.
+     */
+    private static Map<String, Object> reviewAudit(Object status, String reason, Employee supervisor) {
+        // Null-safe shared helper (the ORIGINAL bug site: Map.of threw NPE when
+        // a bare supervisor had no employee row and turned the review into a 500).
+        return NullSafe.mapOf(
+                "status", status,
+                "reason", reason,
+                "validatedBy", supervisor != null ? supervisor.getId() : null);
     }
 
     private FileAsset storeFileAsset(MultipartFile file, User uploader, DocumentType docType) {

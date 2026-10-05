@@ -2,6 +2,8 @@ package tn.steg.backend.audit.domain.model;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
@@ -50,6 +52,11 @@ public class AuditLog extends BaseEntity {
     /** Request correlation id (E1.5) — matches X-Trace-Id header and log MDC. */
     @Column(name = "trace_id", length = 64)
     private String traceId;
+
+    /** Origin channel (S9, §8.2) — defaults to BACK_OFFICE for staff flows. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source", nullable = false, length = 20)
+    private AuditSource source = AuditSource.BACK_OFFICE;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "actor_id")

@@ -145,7 +145,7 @@ class InternshipIntegrationTest {
         InternshipApplication app = new InternshipApplication();
         app.setReference("APP-2026-99999");
         app.setCandidate(candidate);
-        app.setStatus(ApplicationStatus.ACCEPTED);
+        app.setStatus(ApplicationStatus.APPROVED);
         app.setDesiredStartDate(LocalDate.of(2026, 7, 1));
         app.setDesiredEndDate(LocalDate.of(2026, 8, 31)); // 2 months -> PERFECTIONNEMENT
         app = applicationRepository.saveAndFlush(app);
@@ -164,7 +164,7 @@ class InternshipIntegrationTest {
                 .andExpect(jsonPath("$.type").value("PERFECTIONNEMENT"))
                 .andExpect(jsonPath("$.requirement").value("OBLIGATOIRE"))
                 .andExpect(jsonPath("$.paymentEligible").value(true))
-                .andExpect(jsonPath("$.status").value("PLANNED"));
+                .andExpect(jsonPath("$.status").value("APPROVED"));
     }
 
     @Test

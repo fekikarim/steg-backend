@@ -37,10 +37,12 @@ import tn.steg.backend.candidate.domain.model.University;
 import tn.steg.backend.candidate.infrastructure.persistence.CandidateRepository;
 import tn.steg.backend.candidate.infrastructure.persistence.UniversityRepository;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.support.InternshipLifecycleFixture;
 import tn.steg.backend.iam.domain.model.User;
 import tn.steg.backend.iam.domain.model.UserStatus;
 import tn.steg.backend.iam.infrastructure.persistence.UserRepository;
 import tn.steg.backend.iam.infrastructure.security.JwtService;
+import tn.steg.backend.internship.application.InternshipLifecycleService;
 import tn.steg.backend.internship.application.InternshipService;
 import tn.steg.backend.internship.application.dto.InternshipAssignmentRequest;
 import tn.steg.backend.internship.application.dto.InternshipCreateManualRequest;
@@ -81,6 +83,7 @@ class IdempotencyTest {
     @Autowired private InternshipApplicationRepository applicationRepository;
     @Autowired private InternshipRepository internshipRepository;
     @Autowired private InternshipService internshipService;
+    @Autowired private InternshipLifecycleService lifecycleService;
     @Autowired private WorkflowService workflowService;
     @Autowired private JwtService jwtService;
 
@@ -89,6 +92,7 @@ class IdempotencyTest {
     private Candidate candidate;
     private String candidateToken;
     private String supervisorToken;
+    private String hrToken;
     private UserPrincipal hrPrincipal;
     private UserPrincipal supervisorPrincipal;
     private Department dept;
@@ -103,7 +107,8 @@ class IdempotencyTest {
         candidateToken = jwtService.generateAccessToken(candidateUser.getId(), candidateUser.getEmail(), List.of("ROLE_CANDIDATE"));
 
         User hrUser = userRepository.saveAndFlush(new User("hr_k_" + suffix + "@steg.com", "hash", UserStatus.ACTIVE));
-        hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
+        hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         User supervisorUser = userRepository.saveAndFlush(new User("sup_k_" + suffix + "@steg.com", "hash", UserStatus.ACTIVE));
         supervisorToken = jwtService.generateAccessToken(supervisorUser.getId(), supervisorUser.getEmail(), List.of("ROLE_SUPERVISOR"));
@@ -113,6 +118,10 @@ class IdempotencyTest {
         Employee supervisorEmployee = employeeRepository.saveAndFlush(new Employee("EMP-K-S-" + suffix, "K", "Sup", dept));
         supervisorEmployee.setUser(supervisorUser);
         supervisorEmployee = employeeRepository.saveAndFlush(supervisorEmployee);
+        // ADMIN staff hold employee profiles too (required for certificate attribution).
+        Employee hrEmployee = new Employee("EMP-K-HR-" + suffix, "K", "Hr", dept);
+        hrEmployee.setUser(hrUser);
+        employeeRepository.saveAndFlush(hrEmployee);
         this.dept = dept;
         this.supervisorEmployee = supervisorEmployee;
 
@@ -142,10 +151,11 @@ class IdempotencyTest {
                 .andReturn().getResponse().getContentAsString();
 
         // Control: same request WITHOUT the key is refused (proves single execution matters).
+        // AGENTS.md §4: an invalid transition is a 409 INVALID_STATE_TRANSITION.
         mockMvc.perform(post("/api/applications/" + app.getId() + "/submit")
                         .header("Authorization", "Bearer " + candidateToken))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error").value("INVALID_STATUS_TRANSITION"));
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("INVALID_STATE_TRANSITION"));
 
         // Replay: same key returns the identical stored response instead of failing.
         String second = mockMvc.perform(post("/api/applications/" + app.getId() + "/submit")
@@ -194,11 +204,16 @@ class IdempotencyTest {
         internshipService.assign(internship.getId(), new InternshipAssignmentRequest(
                 dept.getId(), supervisorEmployee.getId(),
                 LocalDate.of(2026, 1, 1), LocalDate.of(2026, 4, 1), "k"), hrPrincipal);
-        workflowService.transitionInternship(internship.getId(),
-                new WorkflowTransitionRequest("COMPLETED", WorkflowActionType.COMPLETION, null, "k"), hrPrincipal);
+        InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository, internship.getId(), hrPrincipal);
+        // Administrative validation is a precondition for certificates.
+        InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository, internship.getId(), hrPrincipal);
 
         String first = mockMvc.perform(post("/api/internships/" + internship.getId() + "/certificates")
-                        .header("Authorization", "Bearer " + supervisorToken)
+                        .header("Authorization", "Bearer " + hrToken)
                         .header("X-Idempotency-Key", "k-cert-1"))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
@@ -206,13 +221,13 @@ class IdempotencyTest {
 
         // Control: without the key the duplicate is refused outright.
         mockMvc.perform(post("/api/internships/" + internship.getId() + "/certificates")
-                        .header("Authorization", "Bearer " + supervisorToken))
+                        .header("Authorization", "Bearer " + hrToken))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.error").value("CERTIFICATE_ALREADY_EXISTS"));
 
         // Replay: same key returns the identical certificate instead of failing.
         String second = mockMvc.perform(post("/api/internships/" + internship.getId() + "/certificates")
-                        .header("Authorization", "Bearer " + supervisorToken)
+                        .header("Authorization", "Bearer " + hrToken)
                         .header("X-Idempotency-Key", "k-cert-1"))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();

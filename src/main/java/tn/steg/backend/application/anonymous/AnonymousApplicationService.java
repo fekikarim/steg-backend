@@ -61,8 +61,10 @@ public class AnonymousApplicationService {
                                              List<MultipartFile> files) {
         String nationalIdHash = NationalIdHasher.sha256Hex(request.nationalId());
 
-        if (candidateRepository.existsByNationalIdHash(nationalIdHash)) {
-            Candidate existing = candidateRepository.findByNationalIdHash(nationalIdHash)
+        // Live profiles only: a soft-deleted candidate owns no applications and
+        // must not be resurrected by a new submission (V42, assumption #13).
+        if (candidateRepository.existsByNationalIdHashAndDeletedAtIsNull(nationalIdHash)) {
+            Candidate existing = candidateRepository.findByNationalIdHashAndDeletedAtIsNull(nationalIdHash)
                     .orElseThrow(() -> new ResourceNotFoundException("Candidate not found"));
             List<InternshipApplication> apps = applicationRepository.findByCandidateId(existing.getId());
             boolean hasActive = apps.stream().anyMatch(a -> a.getStatus() != tn.steg.backend.application.domain.model.ApplicationStatus.WITHDRAWN);
@@ -105,7 +107,8 @@ public class AnonymousApplicationService {
         // the fact with field-level values only (never CIN, password, or token material).
         auditService.log("ANONYMOUS_APPLICATION_SUBMITTED", "InternshipApplication", applicationId, null,
                 java.util.Map.of("reference", submitted.reference(), "candidateId", candidate.getId().toString()),
-                user.getId(), null, CANDIDATE_ROLE_CODE, null);
+                user.getId(), null, CANDIDATE_ROLE_CODE, null,
+                tn.steg.backend.audit.domain.model.AuditSource.FRONT_OFFICE);
 
         return new AnonymousSubmissionResponse(
                 submitted.reference(),
@@ -117,7 +120,7 @@ public class AnonymousApplicationService {
     private User resolveOrCreateUser(AnonymousApplicationSubmitRequest request, String nationalIdHash) {
         return userRepository.findByEmail(request.email())
                 .map(user -> {
-                    log.info("Reusing existing user for anonymous submission: {}", user.getEmail());
+                    log.info("Reusing existing user for anonymous submission: userId={}", user.getId());
                     return user;
                 })
                 .orElseGet(() -> {
@@ -133,8 +136,19 @@ public class AnonymousApplicationService {
 
     private Candidate resolveOrCreateCandidate(AnonymousApplicationSubmitRequest request,
                                                String nationalIdHash, User user) {
-        return candidateRepository.findByNationalIdHash(nationalIdHash)
+        return candidateRepository.findByNationalIdHashAndDeletedAtIsNull(nationalIdHash)
                 .map(candidate -> {
+                    // Staff-created profile (V44 / §5.1): the applicant CLAIMS it
+                    // instead of creating a duplicate — the account is attached
+                    // and managed_by is preserved. Never a tombstone: the lookup
+                    // is live-only (assumption #13).
+                    if (candidate.getUser() == null) {
+                        candidate.setUser(user);
+                        auditService.log("CANDIDATE_CLAIMED", "Candidate", candidate.getId(), null,
+                                java.util.Map.of("matchedOn", "CIN", "channel", "ANONYMOUS_INTAKE"),
+                                user.getId(), null, CANDIDATE_ROLE_CODE, null,
+                tn.steg.backend.audit.domain.model.AuditSource.FRONT_OFFICE);
+                    }
                     candidate.setFirstName(request.firstName());
                     candidate.setLastName(request.lastName());
                     candidate.setEmail(request.email());

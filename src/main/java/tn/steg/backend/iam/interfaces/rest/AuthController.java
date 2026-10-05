@@ -19,6 +19,7 @@ import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.common.interfaces.rest.PublicEndpoint;
 import tn.steg.backend.iam.application.AuthService;
 import tn.steg.backend.iam.application.dto.AuthResponse;
+import tn.steg.backend.iam.application.dto.ChangePasswordRequest;
 import tn.steg.backend.iam.application.dto.LoginRequest;
 import tn.steg.backend.iam.application.dto.RefreshRequest;
 import tn.steg.backend.iam.application.dto.RegisterRequest;
@@ -49,6 +50,23 @@ public class AuthController {
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request,
                                               HttpServletRequest httpRequest) {
         AuthResponse response = authService.login(
+                request,
+                extractIpAddress(httpRequest),
+                httpRequest.getHeader("User-Agent"));
+        return ResponseEntity.ok(response);
+    }
+
+    @PublicEndpoint
+    @PostMapping("/back-office-login")
+    @Operation(summary = "Back-office login (ADMIN and SUPERVISOR only)",
+            description = "Same credential check as /login, but only ADMIN and SUPERVISOR "
+                    + "accounts receive tokens. Any other role is refused with 403 "
+                    + "(audit §1: exactly Admin and Supervisor in the back office). "
+                    + "Front-office and mobile clients keep using /login.")
+    @SecurityRequirements
+    public ResponseEntity<AuthResponse> backOfficeLogin(@Valid @RequestBody LoginRequest request,
+                                                       HttpServletRequest httpRequest) {
+        AuthResponse response = authService.backOfficeLogin(
                 request,
                 extractIpAddress(httpRequest),
                 httpRequest.getHeader("User-Agent"));
@@ -87,6 +105,18 @@ public class AuthController {
         if (userId != null) {
             authService.logoutAll(userId);
         }
+        return ResponseEntity.noContent().build();
+    }
+
+    @PreAuthorize("isAuthenticated()")
+    @PostMapping("/change-password")
+    @Operation(summary = "Change the authenticated user's password")
+    public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
+        UUID userId = getCurrentUserId();
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        authService.changePassword(userId, request);
         return ResponseEntity.noContent().build();
     }
 

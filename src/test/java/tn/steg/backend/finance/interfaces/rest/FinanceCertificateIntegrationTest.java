@@ -30,12 +30,15 @@ import tn.steg.backend.candidate.domain.model.University;
 import tn.steg.backend.candidate.infrastructure.persistence.CandidateRepository;
 import tn.steg.backend.candidate.infrastructure.persistence.UniversityRepository;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.support.InternshipLifecycleFixture;
 import tn.steg.backend.document.domain.service.FileStorageService;
 import tn.steg.backend.document.infrastructure.storage.LocalFileStorageService;
 import tn.steg.backend.iam.domain.model.User;
 import tn.steg.backend.iam.domain.model.UserStatus;
 import tn.steg.backend.iam.infrastructure.persistence.UserRepository;
 import tn.steg.backend.iam.infrastructure.security.JwtService;
+import tn.steg.backend.internship.application.InternshipLifecycleService;
+import tn.steg.backend.internship.application.InternshipLifecycleService;
 import tn.steg.backend.internship.application.InternshipService;
 import tn.steg.backend.internship.application.dto.InternshipAssignmentRequest;
 import tn.steg.backend.internship.application.dto.InternshipCreateManualRequest;
@@ -50,6 +53,7 @@ import tn.steg.backend.organization.infrastructure.persistence.EmployeeRepositor
 import tn.steg.backend.workflow.application.WorkflowService;
 import tn.steg.backend.workflow.application.dto.WorkflowTransitionRequest;
 import tn.steg.backend.workflow.domain.model.WorkflowActionType;
+import tn.steg.backend.workflow.domain.model.ApprovalDecision;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -151,6 +155,8 @@ class FinanceCertificateIntegrationTest {
 
     @Autowired
     private InternshipService internshipService;
+    @Autowired
+    private InternshipLifecycleService lifecycleService;
 
     @Autowired
     private WorkflowService workflowService;
@@ -215,13 +221,13 @@ class FinanceCertificateIntegrationTest {
                 .build();
 
         hrUser = userRepository.saveAndFlush(new User("hr_fin@steg.com", "hash", UserStatus.ACTIVE));
-        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         adminUser = userRepository.saveAndFlush(new User("admin_fin@steg.com", "hash", UserStatus.ACTIVE));
         adminToken = jwtService.generateAccessToken(adminUser.getId(), adminUser.getEmail(), List.of("ROLE_ADMIN"));
 
         financeUser = userRepository.saveAndFlush(new User("finance_fin@steg.com", "hash", UserStatus.ACTIVE));
-        financeToken = jwtService.generateAccessToken(financeUser.getId(), financeUser.getEmail(), List.of("ROLE_FINANCE"));
+        financeToken = jwtService.generateAccessToken(financeUser.getId(), financeUser.getEmail(), List.of("ROLE_ADMIN"));
 
         supervisorUser = userRepository.saveAndFlush(new User("supervisor_fin@steg.com", "hash", UserStatus.ACTIVE));
         supervisorToken = jwtService.generateAccessToken(supervisorUser.getId(), supervisorUser.getEmail(), List.of("ROLE_SUPERVISOR"));
@@ -242,6 +248,11 @@ class FinanceCertificateIntegrationTest {
         financeEmployee.setUser(financeUser);
         employeeRepository.saveAndFlush(financeEmployee);
 
+        // ADMIN staff hold employee profiles too (required for certificate attribution).
+        Employee hrEmployee = new Employee("EMP-FIN-HR", "HR", "Staff", dept);
+        hrEmployee.setUser(hrUser);
+        employeeRepository.saveAndFlush(hrEmployee);
+
         University uni = universityRepository.saveAndFlush(new University("INSAT_FIN", "INSAT Tunis"));
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         String cinHash = Base64.getEncoder().encodeToString(digest.digest("44556677".getBytes(StandardCharsets.UTF_8)));
@@ -250,7 +261,7 @@ class FinanceCertificateIntegrationTest {
         internCandidate.setNationalIdEncrypted("44556677");
         internCandidate = candidateRepository.saveAndFlush(internCandidate);
 
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         // OBLIGATOIRE 3-month internship, completed (Jan 1 → Apr 1 = exactly 3 months)
         obligatoryCompleted = createCompletedInternship(
@@ -266,9 +277,13 @@ class FinanceCertificateIntegrationTest {
     private Internship createCompletedInternship(LocalDate start, LocalDate end, boolean obligatory,
                                                  UserPrincipal hrPrincipal) {
         Internship internship = createActiveInternshipWithFlag(start, end, obligatory, hrPrincipal);
-        workflowService.transitionInternship(internship.getId(),
-                new WorkflowTransitionRequest("COMPLETED", WorkflowActionType.COMPLETION, null, "Internship completed"),
-                hrPrincipal);
+        InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository, internship.getId(), hrPrincipal);
+        // Administrative validation is a precondition for certificates.
+        InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository, internship.getId(), hrPrincipal);
         return ((tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository)
                 .findById(internship.getId()).orElseThrow();
     }
@@ -546,24 +561,33 @@ class FinanceCertificateIntegrationTest {
     // -------------------------------------------------------------------------
 
     @Test
-    @DisplayName("Approval issues a distinct receipt PDF and notifies; non-FINANCE cannot decide")
+    @DisplayName("Approval issues a distinct receipt PDF and notifies; only ADMIN or the assigned supervisor decide")
     void approveHappyPath() throws Exception {
         UUID caseId = attachDossier(openCertifiedCase(obligatoryCompleted.getId(), financeToken));
 
-        // HR and ADMIN hold no FINANCE decision power
+        // Unassigned supervisor holds no decision power over foreign cases
+        User outsiderUser = userRepository.saveAndFlush(new User("outsider_sup@steg.com", "hash", UserStatus.ACTIVE));
+        Employee outsiderEmployee = new Employee("EMP-FIN-OUT", "Out", "Sider", dept);
+        outsiderEmployee.setUser(outsiderUser);
+        employeeRepository.saveAndFlush(outsiderEmployee);
+        String outsiderToken = jwtService.generateAccessToken(outsiderUser.getId(), outsiderUser.getEmail(),
+                List.of("ROLE_SUPERVISOR"));
         mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
-                        .header("Authorization", "Bearer " + hrToken)
+                        .header("Authorization", "Bearer " + outsiderToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{}"))
+        // ...nor read the foreign case or list it (assigned-scope everywhere).
+        mockMvc.perform(get("/api/finance-cases/" + caseId)
+                        .header("Authorization", "Bearer " + outsiderToken))
                 .andExpect(status().isForbidden());
-
+        mockMvc.perform(get("/api/finance-cases")
+                        .header("Authorization", "Bearer " + outsiderToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(0));
+        // Assigned supervisor decides their own case
         MvcResult approved = mockMvc.perform(post("/api/finance-cases/" + caseId + "/approve")
-                        .header("Authorization", "Bearer " + financeToken)
+                        .header("Authorization", "Bearer " + supervisorToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Dossier complete, payment cleared.\"}"))
                 .andExpect(status().isOk())
@@ -668,12 +692,12 @@ class FinanceCertificateIntegrationTest {
     // -------------------------------------------------------------------------
 
     @Test
-    @DisplayName("Active supervisor generates a valid certificate PDF; client dates are impossible")
+    @DisplayName("ADMIN generates a valid certificate PDF; supervisors are refused; client dates are impossible")
     void certificateGeneration() throws Exception {
         // A spoofed client date cannot even be expressed: the endpoint takes no
         // body, so any injected JSON is ignored and server time still rules.
         MvcResult generated = mockMvc.perform(post("/api/internships/" + obligatoryCompleted.getId() + "/certificates")
-                        .header("Authorization", "Bearer " + supervisorToken)
+                        .header("Authorization", "Bearer " + hrToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"generationDate\":\"2000-01-01T00:00:00Z\",\"issueDate\":\"2000-01-01\"}"))
                 .andExpect(status().isCreated())
@@ -687,18 +711,22 @@ class FinanceCertificateIntegrationTest {
 
         // Repeated generation is explicitly rejected (no silent duplicates).
         mockMvc.perform(post("/api/internships/" + obligatoryCompleted.getId() + "/certificates")
-                        .header("Authorization", "Bearer " + supervisorToken))
+                        .header("Authorization", "Bearer " + hrToken))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.error").value("CERTIFICATE_ALREADY_EXISTS"));
 
-        // Intern (non-supervisor) and non-COMPLETED internships are rejected
+        // Generation is an administrative act: the assigned supervisor and the
+        // intern are refused at the authorization layer (no business check runs).
+        mockMvc.perform(post("/api/internships/" + obligatoryCompleted.getId() + "/certificates")
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isForbidden());
         mockMvc.perform(post("/api/internships/" + obligatoryCompleted.getId() + "/certificates")
                         .header("Authorization", "Bearer " + internToken))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/api/internships/" + activeOnly.getId() + "/certificates")
-                        .header("Authorization", "Bearer " + supervisorToken))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error").value("INTERNSHIP_NOT_COMPLETED"));
+                        .header("Authorization", "Bearer " + hrToken))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("INTERNSHIP_NOT_VALIDATED"));
 
         // Download is a valid PDF mentioning the intern and the reference
         MvcResult download = mockMvc.perform(get("/api/certificates/" + certificateId)
@@ -724,7 +752,7 @@ class FinanceCertificateIntegrationTest {
     @DisplayName("Certificate and payment receipt are distinct artifacts")
     void certificateAndReceiptAreDistinct() throws Exception {
         MvcResult certResult = mockMvc.perform(post("/api/internships/" + obligatoryCompleted.getId() + "/certificates")
-                        .header("Authorization", "Bearer " + supervisorToken))
+                        .header("Authorization", "Bearer " + hrToken))
                 .andExpect(status().isCreated())
                 .andReturn();
         String certRef = objectMapper.readTree(certResult.getResponse().getContentAsString())
@@ -763,7 +791,7 @@ class FinanceCertificateIntegrationTest {
     @DisplayName("Official templates carry titles, tables, identity data and the validation TODO")
     void officialTemplateContent() throws Exception {
         MvcResult certResult = mockMvc.perform(post("/api/internships/" + obligatoryCompleted.getId() + "/certificates")
-                        .header("Authorization", "Bearer " + supervisorToken))
+                        .header("Authorization", "Bearer " + hrToken))
                 .andExpect(status().isCreated())
                 .andReturn();
         String certText = pdfText(mockMvc.perform(get("/api/certificates/"
@@ -778,8 +806,8 @@ class FinanceCertificateIntegrationTest {
         assertThat(certText).contains("44556677");
         assertThat(certText).contains("INSAT Tunis");
         assertThat(certText).contains("Fait à Tunis");
-        assertThat(certText).contains("TODO — VALIDATION");
-        assertThat(certText).contains("OFFICIELLE STEG REQUISE");
+        assertThat(certText).contains("validation administrative des informations");
+        assertThat(certText).contains("Document généré et validé électroniquement");
         assertThat(certText).doesNotContain("150.00");
 
         UUID caseId = attachDossier(openCertifiedCase(obligatoryCompleted.getId(), financeToken));
@@ -798,8 +826,8 @@ class FinanceCertificateIntegrationTest {
         assertThat(receiptText).contains("Sami Gharbi");
         assertThat(receiptText).contains("44556677");
         assertThat(receiptText).contains("150.00");
-        assertThat(receiptText).contains("TODO — VALIDATION");
-        assertThat(receiptText).contains("OFFICIELLE STEG REQUISE");
+        assertThat(receiptText).contains("preuve documentaire du paiement approuvé");
+        assertThat(receiptText).contains("Document comptable authentifié électroniquement");
         assertThat(receiptText).doesNotContain("ATTESTATION");
     }
 
@@ -809,7 +837,7 @@ class FinanceCertificateIntegrationTest {
         UUID caseId = attachDossier(openCertifiedCase(obligatoryCompleted.getId(), financeToken));
         // E1.3: openCertifiedCase pre-seeds a certificate, so the certificate-outage
         // half runs on a fresh cert-free completed internship (same fixture helper).
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
         Internship outageInternship = createCompletedInternship(
                 LocalDate.of(2026, 1, 1), LocalDate.of(2026, 4, 1), false, hrPrincipal);
         long assetsBefore = fileAssetRepository.count();
@@ -823,7 +851,7 @@ class FinanceCertificateIntegrationTest {
         outageStorage.outage.set(true);
         try {
             mockMvc.perform(post("/api/internships/" + outageInternship.getId() + "/certificates")
-                            .header("Authorization", "Bearer " + supervisorToken))
+                            .header("Authorization", "Bearer " + hrToken))
                     .andExpect(status().is5xxServerError());
             assertThat(certificateRepository.findByInternshipId(outageInternship.getId())).isEmpty();
 
@@ -860,7 +888,7 @@ class FinanceCertificateIntegrationTest {
         // Retrying after the outage clears must succeed cleanly and produce
         // exactly one artifact each (no duplicate from the earlier failed attempt).
         MvcResult retriedCert = mockMvc.perform(post("/api/internships/" + outageInternship.getId() + "/certificates")
-                        .header("Authorization", "Bearer " + supervisorToken))
+                        .header("Authorization", "Bearer " + hrToken))
                 .andExpect(status().isCreated())
                 .andReturn();
         assertThat(objectMapper.readTree(retriedCert.getResponse().getContentAsString()).get("reference").asText())
@@ -902,7 +930,7 @@ class FinanceCertificateIntegrationTest {
     void realPdfGenerationForManualQa() throws Exception {
         // --- Certificate: real endpoint, no request body, server-generated date ---
         MvcResult certResult = mockMvc.perform(post("/api/internships/" + obligatoryCompleted.getId() + "/certificates")
-                        .header("Authorization", "Bearer " + supervisorToken))
+                        .header("Authorization", "Bearer " + hrToken))
                 .andExpect(status().isCreated())
                 .andReturn();
         JsonNode cert = objectMapper.readTree(certResult.getResponse().getContentAsString());

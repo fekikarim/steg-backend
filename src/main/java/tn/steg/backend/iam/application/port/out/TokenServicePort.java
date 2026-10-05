@@ -7,6 +7,9 @@ public interface TokenServicePort {
 
     String generateAccessToken(UUID userId, String email, List<String> roles);
 
+    /** Overload that embeds {@code mustChangePassword} as a JWT claim. */
+    String generateAccessToken(UUID userId, String email, List<String> roles, boolean mustChangePassword);
+
     String generateRefreshToken();
 
     long getAccessTokenExpirationSeconds();

@@ -52,8 +52,8 @@ public record CandidateRequest(
         @Schema(description = "UUID of the candidate's university")
         UUID universityId,
 
-        @NotBlank(message = "National ID (CIN) is required")
-        @Schema(description = "National ID / CIN — stored encrypted, never returned in list endpoints",
+        @Schema(description = "National ID (CIN) — required on create; when omitted on update the stored "
+                + "value is kept (staff and supervisors edit without ever receiving the CIN)",
                 example = "12345678")
         String nationalId
 ) {}

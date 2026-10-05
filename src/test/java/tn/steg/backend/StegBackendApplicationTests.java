@@ -36,12 +36,12 @@ class StegBackendApplicationTests {
     }
 
     @Test
-    @DisplayName("Flyway migrations V1 through V32 are applied cleanly")
+    @DisplayName("Flyway migrations V1 through V53 are applied cleanly")
     void flywayMigrationSucceeds() {
         assertThat(flyway).isNotNull();
         MigrationInfo current = flyway.info().current();
         assertThat(current).isNotNull();
-        assertThat(current.getVersion().getVersion()).isEqualTo("32");
-        assertThat(current.getDescription()).isEqualTo("allow new application after withdrawn");
+        assertThat(current.getVersion().getVersion()).isEqualTo("53");
+        assertThat(current.getDescription()).isEqualTo("user credentials updated at");
     }
 }

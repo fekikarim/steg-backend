@@ -65,10 +65,10 @@ public class StegKnowledgeBase {
                             + "de suivi. Chaque décision (acceptation, correction demandée, rejet) est notifiée "
                             + "par e-mail et dans l'application."),
             new Entry("workflow-status",
-                    List.of("statut", "status", "under_review", "accepted", "rejected", "correction",
+                    List.of("statut", "status", "under_review", "approved", "rejected", "correction",
                             "en cours", "validé", "refusé", "workflow", "suivi dossier"),
                     "Cycle de vie d'une candidature : DRAFT → SUBMITTED → UNDER_REVIEW → "
-                            + "(NEEDS_CORRECTION → resoumission) → ACCEPTED / REJECTED / WITHDRAWN. "
+                            + "(MODIFICATION_REQUESTED → resoumission) → APPROVED / REJECTED / WITHDRAWN. "
                             + "Le suivi affiche l'historique réel du workflow, pas une frise statique."),
             new Entry("intern-life",
                     List.of("journal", "tâche", "task", "livrable", "deliverable", "carnet", "logbook",

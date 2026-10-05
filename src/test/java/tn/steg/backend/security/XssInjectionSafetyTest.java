@@ -123,7 +123,7 @@ class XssInjectionSafetyTest {
         internship.setType(InternshipType.OBSERVATION);
         internship.setRequirement(InternshipRequirement.OBLIGATOIRE);
         internship.setSubject("Software Engineering");
-        internship.setStatus(InternshipStatus.ACTIVE);
+        internship.setStatus(InternshipStatus.IN_PROGRESS);
         internship = internshipRepository.saveAndFlush(internship);
     }
 

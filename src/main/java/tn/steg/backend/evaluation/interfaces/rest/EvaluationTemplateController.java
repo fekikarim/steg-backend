@@ -19,13 +19,13 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/evaluation-templates")
 @RequiredArgsConstructor
-@Tag(name = "Evaluation Templates", description = "Endpoints for managing Evaluation Templates and Criteria (HR/ADMIN)")
+@Tag(name = "Evaluation Templates", description = "Endpoints for managing Evaluation Templates and Criteria (ADMIN)")
 public class EvaluationTemplateController {
 
     private final EvaluationService evaluationService;
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
     @Operation(summary = "List evaluation templates")
     public ResponseEntity<List<EvaluationTemplateResponse>> listTemplates(
             @RequestParam(name = "activeOnly", defaultValue = "false") boolean activeOnly) {
@@ -33,14 +33,14 @@ public class EvaluationTemplateController {
     }
 
     @GetMapping("/{templateId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
     @Operation(summary = "Get evaluation template by ID")
     public ResponseEntity<EvaluationTemplateResponse> getTemplate(@PathVariable UUID templateId) {
         return ResponseEntity.ok(evaluationService.getTemplate(templateId));
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Create evaluation template (HR/ADMIN only)")
     public ResponseEntity<EvaluationTemplateResponse> createTemplate(
             @Valid @RequestBody EvaluationTemplateRequest request,
@@ -50,7 +50,7 @@ public class EvaluationTemplateController {
     }
 
     @PutMapping("/{templateId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Update evaluation template (HR/ADMIN only)")
     public ResponseEntity<EvaluationTemplateResponse> updateTemplate(
             @PathVariable UUID templateId,
@@ -60,7 +60,7 @@ public class EvaluationTemplateController {
     }
 
     @DeleteMapping("/{templateId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Deactivate evaluation template (HR/ADMIN only)")
     public ResponseEntity<Void> deactivateTemplate(
             @PathVariable UUID templateId,
@@ -74,14 +74,14 @@ public class EvaluationTemplateController {
     // -------------------------------------------------------------------------
 
     @GetMapping("/{templateId}/criteria")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
     @Operation(summary = "List criteria of an evaluation template")
     public ResponseEntity<List<EvaluationCriterionResponse>> listCriteria(@PathVariable UUID templateId) {
         return ResponseEntity.ok(evaluationService.listCriteria(templateId));
     }
 
     @PostMapping("/{templateId}/criteria")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Add criterion to an evaluation template (HR/ADMIN only)")
     public ResponseEntity<EvaluationCriterionResponse> addCriterion(
             @PathVariable UUID templateId,
@@ -92,7 +92,7 @@ public class EvaluationTemplateController {
     }
 
     @PutMapping("/criteria/{criterionId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Update evaluation criterion (HR/ADMIN only)")
     public ResponseEntity<EvaluationCriterionResponse> updateCriterion(
             @PathVariable UUID criterionId,

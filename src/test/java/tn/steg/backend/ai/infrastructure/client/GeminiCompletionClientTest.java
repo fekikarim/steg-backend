@@ -192,6 +192,51 @@ class GeminiCompletionClientTest {
     }
 
     @Test
+    @DisplayName("blank model name is a clear error with no network call and no hard-coded default")
+    void blankModelPerformsNoNetworkCall() {
+        AiProperties props = enabledProperties();
+        props.setModel("   ");
+
+        AiCompletionResult result = client(props).complete("sys", List.of("q"));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.errorMessage()).containsIgnoringCase("model");
+        assertThat(new AiProperties().getModel()).isEmpty();
+        assertThat(receivedPaths).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a hanging provider hits the read timeout and degrades instead of blocking")
+    void readTimeoutDegradesGracefully() throws Exception {
+        HttpServer slow = HttpServer.create(new InetSocketAddress(0), 0);
+        slow.createContext("/", exchange -> {
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+            byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body);
+            }
+        });
+        slow.setExecutor(Executors.newSingleThreadExecutor());
+        slow.start();
+        try {
+            AiProperties props = enabledProperties();
+            props.setBaseUrl("http://localhost:" + slow.getAddress().getPort());
+            props.setTimeoutMs(400);
+
+            AiCompletionResult result = client(props).complete("sys", List.of("q"));
+
+            assertThat(result.success()).isFalse();
+        } finally {
+            slow.stop(0);
+        }
+    }
+
+    @Test
     @DisplayName("isApiKeyConfigured rejects blank and placeholder literals")
     void apiKeyConfiguredGuard() {
         assertThat(GeminiCompletionClient.isApiKeyConfigured(null)).isFalse();

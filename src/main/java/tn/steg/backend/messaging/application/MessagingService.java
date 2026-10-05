@@ -491,7 +491,7 @@ public class MessagingService {
         assertActiveMembership(message.getConversation().getId(), actor.getId());
 
         boolean isSender = message.getSender().getId().equals(actor.getId());
-        boolean isStaff = actor.hasRole("ADMIN") || actor.hasRole("HR");
+        boolean isStaff = actor.hasRole("ADMIN");
         if (!isSender && !isStaff) {
             throw new AccessDeniedException("Only the sender or staff may delete this message.");
         }
@@ -694,7 +694,7 @@ public class MessagingService {
      * staff platform role. Used only when the revoke policy is enabled.
      */
     private boolean hasGroupStanding(UUID userId) {
-        if (!internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.ACTIVE).isEmpty()) {
+        if (!internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.IN_PROGRESS).isEmpty()) {
             return true;
         }
         if (employeeRepository.findByUserId(userId).isPresent()) {
@@ -704,8 +704,7 @@ public class MessagingService {
                 .map(user -> user.getAssignedRoles().stream()
                         .map(role -> role.getCode() == null ? ""
                                 : role.getCode().toUpperCase().replaceFirst("^ROLE_", ""))
-                        .anyMatch(code -> code.equals("ADMIN") || code.equals("HR") || code.equals("DIRECTOR")
-                                || code.equals("SUPERVISOR") || code.equals("FINANCE")))
+                        .anyMatch(code -> code.equals("ADMIN") || code.equals("SUPERVISOR")))
                 .orElse(false);
     }
 
@@ -717,7 +716,7 @@ public class MessagingService {
     }
 
     private void assertCanManageMembers(Conversation conversation, UserPrincipal actor) {
-        if (actor.hasRole("ADMIN") || actor.hasRole("HR") || actor.hasRole("DIRECTOR")) {
+        if (actor.hasRole("ADMIN")) {
             return;
         }
         var membership = memberRepository.findActiveByConversationIdAndUserId(conversation.getId(), actor.getId())
@@ -729,7 +728,7 @@ public class MessagingService {
     }
 
     private void assertIsCurrentIntern(UUID userId) {
-        List<Internship> active = internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.ACTIVE);
+        List<Internship> active = internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.IN_PROGRESS);
         if (active.isEmpty()) {
             throw new BusinessRuleException("NOT_CURRENT_INTERN",
                     "GROUP conversations are scoped to users with a currently ACTIVE internship.");

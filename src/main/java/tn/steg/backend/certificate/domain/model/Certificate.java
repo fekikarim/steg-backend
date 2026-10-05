@@ -40,6 +40,9 @@ public class Certificate extends BaseEntity {
     @Column(name = "template_version", nullable = false)
     private Integer templateVersion = 1;
 
+    @Column(name = "version_number", nullable = false)
+    private Integer versionNumber = 1;
+
     @Column(name = "generated_at", nullable = false)
     private Instant generatedAt;
 

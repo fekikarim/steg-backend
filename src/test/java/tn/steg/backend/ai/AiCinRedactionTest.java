@@ -119,7 +119,7 @@ class AiCinRedactionTest {
         Internship internship = new Internship("INT-CIN-" + suffix, candidate,
                 LocalDate.now().minusMonths(1), LocalDate.now().plusMonths(1),
                 InternshipType.PFE, InternshipRequirement.OBLIGATOIRE);
-        internship.setStatus(InternshipStatus.ACTIVE);
+        internship.setStatus(InternshipStatus.IN_PROGRESS);
         em.persist(internship);
         em.flush();
 
@@ -191,7 +191,7 @@ class AiCinRedactionTest {
         Internship internship = new Internship("INT-LB-" + suffix, candidate,
                 LocalDate.now().minusMonths(2), LocalDate.now().plusMonths(1),
                 InternshipType.PFE, InternshipRequirement.OBLIGATOIRE);
-        internship.setStatus(InternshipStatus.ACTIVE);
+        internship.setStatus(InternshipStatus.IN_PROGRESS);
         em.persist(internship);
         em.flush();
 

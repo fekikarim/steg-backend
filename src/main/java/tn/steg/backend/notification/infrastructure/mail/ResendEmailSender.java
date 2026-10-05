@@ -8,6 +8,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import tn.steg.backend.notification.application.port.out.EmailSender;
+import tn.steg.backend.notification.domain.exception.EmailDeliveryException;
 
 import java.util.List;
 
@@ -135,11 +136,14 @@ public class ResendEmailSender implements EmailSender {
     }
 
     /**
-     * Unchecked exception preserving the contract callers (and tests) rely on.
-     * Wraps ResendException so that NotificationService's retry logic (FAILED → backoff)
-     * still triggers, but without leaking SMTP-specific MailSendException.
+     * Backwards-compatible alias preserving the contract callers (and tests)
+     * rely on. New code should reference the domain exception directly; this
+     * subclass keeps existing catch sites and tests compiling unchanged.
+     * Wraps Resend failures so that NotificationService's retry logic
+     * (FAILED → backoff) still triggers, without leaking provider details.
      */
-    public static class EmailDeliveryException extends RuntimeException {
+    public static class EmailDeliveryException
+            extends tn.steg.backend.notification.domain.exception.EmailDeliveryException {
         public EmailDeliveryException(String message, Throwable cause) {
             super(message, cause);
         }

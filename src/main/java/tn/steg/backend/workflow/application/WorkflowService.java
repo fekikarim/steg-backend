@@ -8,14 +8,14 @@ import org.springframework.transaction.annotation.Transactional;
 import tn.steg.backend.application.domain.model.ApplicationStatus;
 import tn.steg.backend.application.domain.model.InternshipApplication;
 import tn.steg.backend.common.domain.event.ApplicationAcceptedEvent;
+import tn.steg.backend.common.domain.event.ApplicationModificationRequestedEvent;
 import tn.steg.backend.common.domain.event.ApplicationRejectedEvent;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
+import tn.steg.backend.common.domain.exception.InvalidStateTransitionException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.iam.domain.model.User;
 import tn.steg.backend.iam.domain.repository.UserRepository;
-import tn.steg.backend.internship.domain.model.Internship;
-import tn.steg.backend.internship.domain.model.InternshipStatus;
 import tn.steg.backend.workflow.application.dto.WorkflowActionResponse;
 import tn.steg.backend.workflow.application.dto.WorkflowInstanceResponse;
 import tn.steg.backend.workflow.application.dto.WorkflowTransitionRequest;
@@ -115,29 +115,6 @@ public class WorkflowService {
     }
 
     /**
-     * Creates and persists a new InternshipWorkflowInstance for the given internship.
-     * Sets the initial step to PLANNED and marks the instance as RUNNING.
-     */
-    @Transactional
-    public InternshipWorkflowInstance spawnInternshipWorkflow(Internship internship) {
-        WorkflowDefinition def = requireDefinition(DEF_CODE_INTERNSHIP);
-        WorkflowStepDefinition initialStep = requireStep(def.getId(), "PLANNED");
-
-        InternshipWorkflowInstance instance = new InternshipWorkflowInstance(def, internship);
-        instance.setCurrentStep(initialStep);
-        instance.setStatus(WorkflowStatus.RUNNING);
-
-        instance = (InternshipWorkflowInstance) instanceRepository.save(instance);
-        log.info("Spawned InternshipWorkflowInstance id={} for internship ref={}",
-                instance.getId(), internship.getReference());
-        return instance;
-    }
-
-    // =========================================================================
-    // Transition execution
-    // =========================================================================
-
-    /**
      * Executes a workflow transition on an ApplicationWorkflowInstance.
      * <p>
      * Steps:
@@ -200,56 +177,13 @@ public class WorkflowService {
             } else if (request.decision() == ApprovalDecision.REJECTED) {
                 eventPublisher.publishEvent(new ApplicationRejectedEvent(
                         decided.getId(), decided.getReference(), candidateUserId, actor.getId(), request.comment()));
+            } else if (request.decision() == ApprovalDecision.MODIFICATION_REQUESTED) {
+                // §5.2: the candidate is informed of the modification request
+                // (front-office status + notification with the required message).
+                eventPublisher.publishEvent(new ApplicationModificationRequestedEvent(
+                        decided.getId(), decided.getReference(), candidateUserId, actor.getId(), request.comment()));
             }
         }
-        return WorkflowActionResponse.from(action);
-    }
-
-    /**
-     * Executes a workflow transition on an InternshipWorkflowInstance.
-     *
-     * @param internshipId the UUID of the Internship
-     * @param request      transition parameters
-     * @param actor        the authenticated user performing the action
-     * @return the recorded WorkflowAction as a DTO
-     */
-    @Transactional
-    public WorkflowActionResponse transitionInternship(UUID internshipId,
-                                                       WorkflowTransitionRequest request,
-                                                       UserPrincipal actor) {
-        InternshipWorkflowInstance instance = instanceRepository
-                .findInternshipInstanceByInternshipId(internshipId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "No active workflow found for internship: " + internshipId));
-
-        WorkflowStepDefinition targetStep = requireStep(instance.getDefinition().getId(), request.targetStepCode());
-        User performer = requireUser(actor.getId());
-
-        resolveGuard(InternshipWorkflowInstance.class).validateTransition(instance, request.targetStepCode(),
-                request.actionType(), request.decision());
-
-        // Apply aggregate state change
-        applyInternshipStatusTransition(instance.getInternship(), request.targetStepCode());
-
-        String previousStepCode = instance.getCurrentStep() != null ? instance.getCurrentStep().getCode() : null;
-
-        // Advance workflow state
-        instance.setCurrentStep(targetStep);
-        if ("COMPLETED".equalsIgnoreCase(request.targetStepCode())) {
-            instance.setStatus(WorkflowStatus.COMPLETED);
-            instance.setCompletedAt(Instant.now());
-        }
-        instanceRepository.save(instance);
-
-        WorkflowAction action = persistAction(instance, targetStep, performer, request);
-        log.info("InternshipWorkflow transition: internshipId={} → step={} by actor={}",
-                internshipId, request.targetStepCode(), actor.getId());
-        auditService.log(
-                "COMPLETED".equalsIgnoreCase(request.targetStepCode()) ? "INTERNSHIP_COMPLETED" : "INTERNSHIP_ACTIVATED",
-                "Internship", internshipId,
-                Map.of("step", previousStepCode),
-                Map.of("targetStep", request.targetStepCode(), "workflowActionId", action.getId()),
-                actor.getId(), null);
         return WorkflowActionResponse.from(action);
     }
 
@@ -302,7 +236,7 @@ public class WorkflowService {
     /**
      * Returns the current workflow state for an application.
      * IDOR: candidates may only read their own application's state; staff
-     * (ADMIN/HR) may read any. Unknown/other-owned ids yield 404 without
+     * (ADMIN) may read any. Unknown/other-owned ids yield 404 without
      * revealing existence (B6 hardening).
      */
     @Transactional(readOnly = true)
@@ -311,7 +245,7 @@ public class WorkflowService {
                 .findApplicationInstanceByApplicationId(applicationId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "No workflow found for application: " + applicationId));
-        if (!actor.hasRole("ADMIN") && !actor.hasRole("HR")) {
+        if (!actor.hasRole("ADMIN")) {
             UUID ownerId = instance.getApplication().getCandidate().getUser().getId();
             if (!ownerId.equals(actor.getId())) {
                 throw new ResourceNotFoundException(
@@ -351,28 +285,6 @@ public class WorkflowService {
             }
         }
         return ids;
-    }
-
-    /**
-     * Returns the current workflow state for an internship.
-     * IDOR: candidates may only read their own internship's state (mirrors the
-     * application variant); staff (ADMIN/HR) may read any. Unknown/other-owned
-     * ids yield 404 without revealing existence.
-     */
-    @Transactional(readOnly = true)
-    public WorkflowInstanceResponse getInternshipWorkflowState(UUID internshipId, UserPrincipal actor) {
-        InternshipWorkflowInstance instance = instanceRepository
-                .findInternshipInstanceByInternshipId(internshipId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "No workflow found for internship: " + internshipId));
-        if (!actor.hasRole("ADMIN") && !actor.hasRole("HR")) {
-            UUID ownerId = instance.getInternship().getCandidate().getUser().getId();
-            if (!ownerId.equals(actor.getId())) {
-                throw new ResourceNotFoundException(
-                        "No workflow found for internship: " + internshipId);
-            }
-        }
-        return WorkflowInstanceResponse.from(instance);
     }
 
     /**
@@ -448,8 +360,8 @@ public class WorkflowService {
                 && request.decision() == ApprovalDecision.REJECTED) {
             auditAction = "APPLICATION_REJECTED";
         } else if ("FINAL_DECISION".equalsIgnoreCase(request.targetStepCode())
-                && request.decision() == ApprovalDecision.NEEDS_CORRECTION) {
-            auditAction = "APPLICATION_NEEDS_CORRECTION";
+                && request.decision() == ApprovalDecision.MODIFICATION_REQUESTED) {
+            auditAction = "APPLICATION_MODIFICATION_REQUESTED";
         } else if ("UNDER_REVIEW".equalsIgnoreCase(request.targetStepCode())) {
             auditAction = "APPLICATION_UNDER_REVIEW";
         } else {
@@ -477,36 +389,28 @@ public class WorkflowService {
             case "UNDER_REVIEW" -> application.setStatus(ApplicationStatus.UNDER_REVIEW);
             case "FINAL_DECISION" -> {
                 if (decision == ApprovalDecision.APPROVED) {
-                    application.setStatus(ApplicationStatus.ACCEPTED);
+                    application.setStatus(ApplicationStatus.APPROVED);
                 } else if (decision == ApprovalDecision.REJECTED) {
+                    if (comment == null || comment.isBlank()) {
+                        throw new InvalidStateTransitionException(
+                                "A non-blank denial reason is required when rejecting an application.");
+                    }
                     application.setStatus(ApplicationStatus.REJECTED);
-                    if (comment != null && !comment.isBlank()) {
-                        application.setRejectionReason(comment);
+                    application.setRejectionReason(comment);
+                } else if (decision == ApprovalDecision.MODIFICATION_REQUESTED) {
+                    if (comment == null || comment.isBlank()) {
+                        throw new InvalidStateTransitionException(
+                                "A non-blank modification message is required when requesting corrections.");
                     }
-                } else if (decision == ApprovalDecision.NEEDS_CORRECTION) {
-                    application.setStatus(ApplicationStatus.NEEDS_CORRECTION);
-                    if (comment != null && !comment.isBlank()) {
-                        application.setCorrectionComment(comment);
-                    }
+                    application.setStatus(ApplicationStatus.MODIFICATION_REQUESTED);
+                    application.setCorrectionComment(comment);
                 } else {
                     throw new BusinessRuleException("INVALID_DECISION",
-                            "A decision (APPROVED/REJECTED/NEEDS_CORRECTION) is required for FINAL_DECISION step.");
+                            "A decision (APPROVED/REJECTED/MODIFICATION_REQUESTED) is required for FINAL_DECISION step.");
                 }
             }
             default -> throw new BusinessRuleException("UNKNOWN_APPLICATION_STEP",
                     "Unknown application workflow step: " + targetStepCode);
-        }
-    }
-
-    /**
-     * Applies the business aggregate status change for an internship transition.
-     */
-    private void applyInternshipStatusTransition(Internship internship, String targetStepCode) {
-        switch (targetStepCode.toUpperCase()) {
-            case "ACTIVE"    -> internship.setStatus(InternshipStatus.ACTIVE);
-            case "COMPLETED" -> internship.setStatus(InternshipStatus.COMPLETED);
-            default -> throw new BusinessRuleException("UNKNOWN_INTERNSHIP_STEP",
-                    "Unknown internship workflow step: " + targetStepCode);
         }
     }
 

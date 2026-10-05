@@ -9,7 +9,7 @@ import java.util.UUID;
 
 /**
  * Full detail view including decrypted nationalId.
- * Only returned to the candidate themselves or ADMIN / HR staff.
+ * Only returned to the candidate themselves or ADMIN staff.
  */
 @Schema(description = "Full candidate profile including sensitive fields (only for self or staff)")
 public record CandidateDetailResponse(

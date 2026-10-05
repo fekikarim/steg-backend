@@ -33,8 +33,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * E9 — RBAC matrix integration test.
  *
- * <p>Verifies that every protected endpoint domain responds with the correct HTTP status
- * for each of the 6 system roles: ADMIN, HR, SUPERVISOR, FINANCE, CANDIDATE, INTERN.
+ * <p>Back Office is ADMIN + SUPERVISOR only; HR, FINANCE and DIRECTOR roles
+ * were removed permanently (V34). Remaining system roles: ADMIN, SUPERVISOR,
+ * CANDIDATE, INTERN.
  *
  * <p>Strategy:
  * <ul>
@@ -61,11 +62,9 @@ class RbacMatrixTest {
 
     private MockMvc mockMvc;
 
-    // Tokens for each of the 6 system roles
+    // Tokens for each live system role
     private String adminToken;
-    private String hrToken;
     private String supervisorToken;
-    private String financeToken;
     private String candidateToken;
     private String internToken;
 
@@ -75,9 +74,7 @@ class RbacMatrixTest {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
 
         adminToken     = token("rbac_admin_"     + suffix + "@test.tn", "ROLE_ADMIN");
-        hrToken        = token("rbac_hr_"         + suffix + "@test.tn", "ROLE_HR");
         supervisorToken = token("rbac_sup_"       + suffix + "@test.tn", "ROLE_SUPERVISOR");
-        financeToken   = token("rbac_fin_"        + suffix + "@test.tn", "ROLE_FINANCE");
         candidateToken = token("rbac_cand_"       + suffix + "@test.tn", "ROLE_CANDIDATE");
         internToken    = token("rbac_intern_"     + suffix + "@test.tn", "ROLE_INTERN");
     }
@@ -98,9 +95,7 @@ class RbacMatrixTest {
         static Stream<Arguments> matrix() {
             return Stream.of(
                 Arguments.of("ADMIN",      true),
-                Arguments.of("HR",         false),
                 Arguments.of("SUPERVISOR", false),
-                Arguments.of("FINANCE",    false),
                 Arguments.of("CANDIDATE",  false),
                 Arguments.of("INTERN",     false)
             );
@@ -118,19 +113,17 @@ class RbacMatrixTest {
     }
 
     // -------------------------------------------------------------------------
-    // /api/finance-cases — FINANCE only
+    // /api/finance-cases — ADMIN + SUPERVISOR (supervisor sees assigned only)
     // -------------------------------------------------------------------------
 
     @Nested
-    @DisplayName("GET /api/finance-cases — FINANCE and ADMIN")
+    @DisplayName("GET /api/finance-cases — ADMIN and SUPERVISOR")
     class FinanceCasesEndpoint {
 
         static Stream<Arguments> matrix() {
             return Stream.of(
-                Arguments.of("ADMIN",      true),   // hasAnyRole('FINANCE', 'ADMIN')
-                Arguments.of("HR",         false),
-                Arguments.of("SUPERVISOR", false),
-                Arguments.of("FINANCE",    true),
+                Arguments.of("ADMIN",      true),   // hasAnyRole('ADMIN', 'SUPERVISOR')
+                Arguments.of("SUPERVISOR", true),   // scoped to assigned cases in service
                 Arguments.of("CANDIDATE",  false),
                 Arguments.of("INTERN",     false)
             );
@@ -148,19 +141,17 @@ class RbacMatrixTest {
     }
 
     // -------------------------------------------------------------------------
-    // /api/candidates — HR and ADMIN only
+    // /api/candidates — ADMIN + SUPERVISOR
     // -------------------------------------------------------------------------
 
     @Nested
-    @DisplayName("GET /api/candidates — HR and ADMIN")
+    @DisplayName("GET /api/candidates — ADMIN and SUPERVISOR")
     class CandidatesEndpoint {
 
         static Stream<Arguments> matrix() {
             return Stream.of(
                 Arguments.of("ADMIN",      true),
-                Arguments.of("HR",         true),
-                Arguments.of("SUPERVISOR", true),   // hasAnyRole('ADMIN','HR','SUPERVISOR','FINANCE','DIRECTOR')
-                Arguments.of("FINANCE",    true),   // hasAnyRole('ADMIN','HR','SUPERVISOR','FINANCE','DIRECTOR')
+                Arguments.of("SUPERVISOR", true),
                 Arguments.of("CANDIDATE",  false),
                 Arguments.of("INTERN",     false)
             );
@@ -178,19 +169,17 @@ class RbacMatrixTest {
     }
 
     // -------------------------------------------------------------------------
-    // /api/internships — HR, ADMIN, SUPERVISOR see list; CANDIDATE/INTERN see 403
+    // /api/internships — ADMIN, SUPERVISOR see list; CANDIDATE/INTERN see 403
     // -------------------------------------------------------------------------
 
     @Nested
-    @DisplayName("GET /api/internships — HR, ADMIN, SUPERVISOR")
+    @DisplayName("GET /api/internships — ADMIN, SUPERVISOR")
     class InternshipsListEndpoint {
 
         static Stream<Arguments> matrix() {
             return Stream.of(
                 Arguments.of("ADMIN",      true),
-                Arguments.of("HR",         true),
                 Arguments.of("SUPERVISOR", true),
-                Arguments.of("FINANCE",    false),
                 Arguments.of("CANDIDATE",  false),
                 Arguments.of("INTERN",     false)
             );
@@ -208,6 +197,45 @@ class RbacMatrixTest {
     }
 
     // -------------------------------------------------------------------------
+    // Obsolete roles (HR/FINANCE/DIRECTOR) are rejected everywhere, even with
+    // a structurally valid JWT — no endpoint grants them anymore (V34).
+    // -------------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("Obsolete HR/FINANCE/DIRECTOR tokens → 403 on staff endpoints")
+    class ObsoleteRolesRejected {
+
+        static Stream<Arguments> matrix() {
+            return Stream.of(
+                Arguments.of("/api/audit", "ROLE_HR"),
+                Arguments.of("/api/audit", "ROLE_FINANCE"),
+                Arguments.of("/api/audit", "ROLE_DIRECTOR"),
+                Arguments.of("/api/finance-cases", "ROLE_HR"),
+                Arguments.of("/api/finance-cases", "ROLE_FINANCE"),
+                Arguments.of("/api/finance-cases", "ROLE_DIRECTOR"),
+                Arguments.of("/api/candidates", "ROLE_HR"),
+                Arguments.of("/api/candidates", "ROLE_FINANCE"),
+                Arguments.of("/api/candidates", "ROLE_DIRECTOR"),
+                Arguments.of("/api/internships", "ROLE_HR"),
+                Arguments.of("/api/internships", "ROLE_FINANCE"),
+                Arguments.of("/api/internships", "ROLE_DIRECTOR")
+            );
+        }
+
+        @ParameterizedTest(name = "{1} on {0} → 403")
+        @MethodSource("matrix")
+        @DisplayName("obsolete role rejected")
+        void check(String path, String role) throws Exception {
+            String email = "rbac_obs_" + UUID.randomUUID().toString().substring(0, 8) + "@test.tn";
+            User u = userRepository.saveAndFlush(new User(email, "hash", UserStatus.ACTIVE));
+            String staleToken = jwtService.generateAccessToken(u.getId(), u.getEmail(), List.of(role));
+            mockMvc.perform(get(path)
+                    .header("Authorization", "Bearer " + staleToken))
+                    .andExpect(status().isForbidden());
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // GET /api/notifications — authenticated users see their own stream;
     //   each role gets 200 (own notifications, possibly empty).
     // -------------------------------------------------------------------------
@@ -219,9 +247,7 @@ class RbacMatrixTest {
         static Stream<Arguments> matrix() {
             return Stream.of(
                 Arguments.of("ADMIN"),
-                Arguments.of("HR"),
                 Arguments.of("SUPERVISOR"),
-                Arguments.of("FINANCE"),
                 Arguments.of("CANDIDATE"),
                 Arguments.of("INTERN")
             );
@@ -249,9 +275,7 @@ class RbacMatrixTest {
         static Stream<Arguments> matrix() {
             return Stream.of(
                 Arguments.of("ADMIN"),
-                Arguments.of("HR"),
                 Arguments.of("SUPERVISOR"),
-                Arguments.of("FINANCE"),
                 Arguments.of("CANDIDATE"),
                 Arguments.of("INTERN")
             );
@@ -303,9 +327,7 @@ class RbacMatrixTest {
     private String tokenFor(String role) {
         return switch (role) {
             case "ADMIN"      -> adminToken;
-            case "HR"         -> hrToken;
             case "SUPERVISOR" -> supervisorToken;
-            case "FINANCE"    -> financeToken;
             case "CANDIDATE"  -> candidateToken;
             case "INTERN"     -> internToken;
             default           -> throw new IllegalArgumentException("Unknown role: " + role);

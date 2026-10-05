@@ -28,7 +28,14 @@ public interface FinanceCaseRepository {
      */
     Page<FinanceCase> findAllWithInternship(Pageable pageable);
     Page<FinanceCase> findByStatusWithInternship(FinanceCaseStatus status, Pageable pageable);
+    /**
+     * Supervisor-scoped list views: only cases for internships with an ACTIVE
+     * assignment to the supervisor. Join (not fetch) on assignments keeps the
+     * page query pagination-safe; internship rendering reuses the A14 batching.
+     */
+    Page<FinanceCase> findAllForSupervisor(UUID supervisorUserId, Pageable pageable);
+    Page<FinanceCase> findByStatusForSupervisor(FinanceCaseStatus status, UUID supervisorUserId, Pageable pageable);
     FinanceCase save(FinanceCase financeCase);
-    boolean existsByReference(String reference);
-    long countByReferencePrefix(String prefix);
+    /** Atomic reference counter (sequence-backed, race-free — see V51). */
+    long nextReferenceSequence();
 }

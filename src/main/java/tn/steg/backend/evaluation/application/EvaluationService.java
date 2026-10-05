@@ -59,7 +59,7 @@ public class EvaluationService {
     private final AuditService auditService;
 
     // -------------------------------------------------------------------------
-    // Evaluation Templates (HR/ADMIN only)
+    // Evaluation Templates (ADMIN only)
     // -------------------------------------------------------------------------
 
     @Transactional(readOnly = true)

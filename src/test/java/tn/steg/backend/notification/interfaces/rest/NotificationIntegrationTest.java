@@ -219,7 +219,7 @@ class NotificationIntegrationTest {
         University uni = universityRepository.saveAndFlush(new University("UNI_N_" + tag, "Notif Uni " + tag));
         Candidate candidate = newCandidate(tag, candidateUser, uni);
         InternshipApplication app = newSubmittedApplication(tag, candidate);
-        acceptApplication(app, new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR")));
+        acceptApplication(app, new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN")));
 
         MvcResult list = mockMvc.perform(get("/api/notifications")
                         .header("Authorization", "Bearer " + token(candidateUser, "ROLE_CANDIDATE")))
@@ -289,7 +289,7 @@ class NotificationIntegrationTest {
 
         University uni = universityRepository.saveAndFlush(new University("UNI_T_" + tag, "Task Uni"));
         Candidate candidate = newCandidate("TASK" + tag, internUser, uni);
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
         InternshipResponse created = internshipService.createManual(new InternshipCreateManualRequest(
                 candidate.getId(), LocalDate.now().minusDays(3), LocalDate.now().plusDays(60),
                 "Notif project", "Ingénieur", false), hrPrincipal);
@@ -299,10 +299,11 @@ class NotificationIntegrationTest {
                 dept.getId(), supervisorEmployee.getId(),
                 LocalDate.now().minusDays(3), LocalDate.now().plusDays(60), "task test"), hrPrincipal);
 
-        // Supervisor assigns a task to the intern → NORMAL event
+        // ADMIN assigns a task to the intern → NORMAL event
+        // (supervisors read tasks but never author them)
         int mailsBeforeTask = fakeMail.sent.size();
         mockMvc.perform(post("/api/internships/" + internship.getId() + "/tasks")
-                        .header("Authorization", "Bearer " + token(supervisorUser, "ROLE_SUPERVISOR"))
+                        .header("Authorization", "Bearer " + token(hrUser, "ROLE_ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new TaskRequest(
                                 "Prepare report", "Draft the weekly report", internUser.getId(), null, null))))
@@ -342,7 +343,7 @@ class NotificationIntegrationTest {
 
         University uni = universityRepository.saveAndFlush(new University("UNI_M_" + tag, "Msg Uni"));
         Candidate candidate = newCandidate("MSG" + tag, internUser, uni);
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
         InternshipResponse created = internshipService.createManual(new InternshipCreateManualRequest(
                 candidate.getId(), LocalDate.now().minusDays(3), LocalDate.now().plusDays(60),
                 "Msg project", "Ingénieur", false), hrPrincipal);
@@ -512,7 +513,7 @@ class NotificationIntegrationTest {
 
         University uni = universityRepository.saveAndFlush(new University("UNI_J_" + tag, "J Uni"));
         Candidate candidate = newCandidate("JRNL" + tag, internUser, uni);
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
         InternshipResponse created = internshipService.createManual(new InternshipCreateManualRequest(
                 candidate.getId(), LocalDate.now().minusDays(3), LocalDate.now().plusDays(60),
                 "Journal project", "Ingénieur", false), hrPrincipal);

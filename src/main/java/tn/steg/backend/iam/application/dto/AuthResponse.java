@@ -25,4 +25,7 @@ public class AuthResponse {
     @Schema(description = "Token type", example = "Bearer")
     @Builder.Default
     private String tokenType = "Bearer";
+
+    @Schema(description = "Whether the user must change the password before using the application")
+    private boolean mustChangePassword;
 }

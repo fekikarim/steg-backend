@@ -7,6 +7,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -20,6 +21,7 @@ import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.notification.application.NotificationService;
 import tn.steg.backend.notification.application.dto.NotificationResponse;
 
+import java.time.LocalDate;
 import java.util.Map;
 import java.util.UUID;
 
@@ -38,12 +40,16 @@ public class NotificationController {
 
     @GetMapping
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "List my notifications (paginated, optional unread-only filter)")
+    @Operation(summary = "List my notifications (paginated, optional unread-only and date-range filters)",
+            description = "Calendar-day fromDate/toDate bounds resolve in the application time zone "
+                    + "(default Africa/Tunis).")
     public ResponseEntity<Page<NotificationResponse>> listMine(
             @RequestParam(required = false, defaultValue = "false") boolean unreadOnly,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable,
             @AuthenticationPrincipal UserPrincipal actor) {
-        return ResponseEntity.ok(notificationService.listMine(actor, unreadOnly, pageable));
+        return ResponseEntity.ok(notificationService.listMine(actor, unreadOnly, fromDate, toDate, pageable));
     }
 
     @GetMapping("/unread-count")

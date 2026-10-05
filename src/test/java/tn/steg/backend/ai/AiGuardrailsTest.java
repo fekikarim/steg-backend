@@ -20,6 +20,7 @@ import tn.steg.backend.internship.domain.model.Internship;
 import tn.steg.backend.internship.domain.model.InternshipRequirement;
 import tn.steg.backend.internship.domain.model.InternshipStatus;
 import tn.steg.backend.internship.domain.model.InternshipType;
+import tn.steg.backend.internship.domain.repository.InternshipAssignmentRepository;
 import tn.steg.backend.internship.domain.repository.InternshipRepository;
 
 import java.time.LocalDate;
@@ -59,6 +60,9 @@ class AiGuardrailsTest {
     private InternshipRepository internshipRepository;
 
     @Mock
+    private InternshipAssignmentRepository assignmentRepository;
+
+    @Mock
     private StegKnowledgeBase knowledgeBase;
 
     private CandidateAssistantAiContentAssembler candidateAssembler;
@@ -74,7 +78,7 @@ class AiGuardrailsTest {
         candidateAssembler = new CandidateAssistantAiContentAssembler(
                 candidateRepository, applicationRepository, knowledgeBase);
         internAssembler = new InternAssistantAiContentAssembler(
-                internshipRepository, knowledgeBase);
+                internshipRepository, assignmentRepository, knowledgeBase);
 
         candidateId = UUID.randomUUID();
         candidate = new Candidate("Karim", "Test", "karim@steg.tn", "CIN_HASH_12345",
@@ -84,7 +88,7 @@ class AiGuardrailsTest {
         internship = new Internship("INT-E5-001", candidate,
                 LocalDate.now().minusMonths(1), LocalDate.now().plusMonths(2),
                 InternshipType.PFE, InternshipRequirement.OBLIGATOIRE);
-        internship.setStatus(InternshipStatus.ACTIVE);
+        internship.setStatus(InternshipStatus.IN_PROGRESS);
     }
 
     @Test
@@ -161,7 +165,7 @@ class AiGuardrailsTest {
     @Test
     @DisplayName("Intern Assistant: System instruction contains strict grounding, refusal, and advisory clauses")
     void internAssistant_systemInstruction_containsStrictGroundingAndRefusal() {
-        when(internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.ACTIVE))
+        when(internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.IN_PROGRESS))
                 .thenReturn(List.of(internship));
         when(knowledgeBase.retrieve(anyString())).thenReturn(Collections.emptyList());
 
@@ -177,7 +181,7 @@ class AiGuardrailsTest {
     @Test
     @DisplayName("Intern Assistant: System instruction contains prompt-injection guardrail clause")
     void internAssistant_systemInstruction_containsPromptInjectionGuardrail() {
-        when(internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.ACTIVE))
+        when(internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.IN_PROGRESS))
                 .thenReturn(List.of(internship));
         when(knowledgeBase.retrieve(anyString())).thenReturn(Collections.emptyList());
 
@@ -190,7 +194,7 @@ class AiGuardrailsTest {
     @Test
     @DisplayName("Intern Assistant: Adversarial prompt injection treated strictly as data, system instruction immutable")
     void internAssistant_adversarialPromptInjection_treatedAsData() {
-        when(internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.ACTIVE))
+        when(internshipRepository.findByCandidateUserIdAndStatus(userId, InternshipStatus.IN_PROGRESS))
                 .thenReturn(List.of(internship));
         when(knowledgeBase.retrieve(anyString())).thenReturn(Collections.emptyList());
 

@@ -65,20 +65,20 @@ public class AnonymousApplicationController {
 
         String explanation = switch (app.getStatus()) {
             case DRAFT -> "Your draft is saved. Review and submit when ready.";
-            case SUBMITTED -> "Your application has been submitted and is under review.";
+            case SUBMITTED, RESUBMITTED -> "Your application has been submitted and is under review.";
             case UNDER_REVIEW -> "Your application is being reviewed by our team.";
-            case NEEDS_CORRECTION -> "Additional information is required. Please check your documents.";
-            case ACCEPTED -> "Congratulations! Your application has been accepted.";
+            case MODIFICATION_REQUESTED -> "Additional information is required. Please check your documents.";
+            case APPROVED -> "Congratulations! Your application has been accepted.";
             case REJECTED -> "We are sorry, your application was not accepted this cycle.";
             case WITHDRAWN -> "Your application has been withdrawn.";
         };
 
         String nextStep = switch (app.getStatus()) {
             case DRAFT -> "Continue filling in your application and submit.";
-            case SUBMITTED -> "Wait for the review team to evaluate your dossier.";
+            case SUBMITTED, RESUBMITTED -> "Wait for the review team to evaluate your dossier.";
             case UNDER_REVIEW -> "The review is in progress. Check notifications for updates.";
-            case NEEDS_CORRECTION -> "Upload the requested documents or provide clarifications.";
-            case ACCEPTED -> "Prepare for your internship onboarding.";
+            case MODIFICATION_REQUESTED -> "Upload the requested documents or provide clarifications.";
+            case APPROVED -> "Prepare for your internship onboarding.";
             case REJECTED -> "You may reapply in the next cycle.";
             case WITHDRAWN -> "No further action required.";
         };
@@ -89,14 +89,18 @@ public class AnonymousApplicationController {
             timeline.add("Submitted: " + app.getSubmissionDate());
         }
         if (app.getStatus() == ApplicationStatus.UNDER_REVIEW ||
-            app.getStatus() == ApplicationStatus.NEEDS_CORRECTION ||
-            app.getStatus() == ApplicationStatus.ACCEPTED ||
+            app.getStatus() == ApplicationStatus.MODIFICATION_REQUESTED ||
+            app.getStatus() == ApplicationStatus.MODIFICATION_REQUESTED ||
+            app.getStatus() == ApplicationStatus.APPROVED ||
+            app.getStatus() == ApplicationStatus.APPROVED ||
             app.getStatus() == ApplicationStatus.REJECTED) {
             timeline.add("Under Review: " + (app.getUpdatedAt() != null ? app.getUpdatedAt() : app.getSubmissionDate()));
         }
-        if (app.getStatus() == ApplicationStatus.NEEDS_CORRECTION) {
+        if (app.getStatus() == ApplicationStatus.MODIFICATION_REQUESTED
+            || app.getStatus() == ApplicationStatus.MODIFICATION_REQUESTED) {
             timeline.add("Additional Information Requested: " + app.getUpdatedAt());
-        } else if (app.getStatus() == ApplicationStatus.ACCEPTED) {
+        } else if (app.getStatus() == ApplicationStatus.APPROVED
+            || app.getStatus() == ApplicationStatus.APPROVED) {
             timeline.add("Accepted: " + app.getUpdatedAt());
         } else if (app.getStatus() == ApplicationStatus.REJECTED) {
             timeline.add("Decision Recorded: " + app.getUpdatedAt());

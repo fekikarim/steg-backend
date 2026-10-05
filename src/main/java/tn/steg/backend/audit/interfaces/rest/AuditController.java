@@ -12,6 +12,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,7 +22,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.audit.application.dto.AuditLogResponse;
+import tn.steg.backend.audit.application.dto.AuditQuery;
+import tn.steg.backend.audit.domain.model.AuditSource;
 
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -41,8 +46,8 @@ public class AuditController {
     @PreAuthorize("hasRole('ADMIN')")
     @Operation(
             summary = "List audit log entries (ADMIN only)",
-            description = "Returns the unified audit trail, optionally filtered by action, entity or actor. "
-                    + "Read only; respects the pagination/sorting contract shared by all list endpoints."
+            description = "Returns the unified audit trail. Every filter combines server-side in one "
+                    + "paged query. Read only; respects the pagination/sorting contract shared by all list endpoints."
     )
     @ApiResponse(responseCode = "200", description = "Audit log page",
             content = @Content(schema = @Schema(implementation = AuditLogResponse.class)))
@@ -50,10 +55,19 @@ public class AuditController {
     @ApiResponse(responseCode = "403", description = "ADMIN role required")
     public ResponseEntity<Page<AuditLogResponse>> list(
             @RequestParam(required = false) @Parameter(description = "Exact action code, e.g. APPLICATION_ACCEPTED") String action,
+            @RequestParam(required = false) @Parameter(description = "Filter by entity type, e.g. Internship") String entityType,
             @RequestParam(required = false) @Parameter(description = "Filter by entity ID") UUID entityId,
             @RequestParam(required = false) @Parameter(description = "Filter by actor (user) ID") UUID actorId,
+            @RequestParam(required = false) @Parameter(description = "Filter by origin channel") AuditSource source,
+            @RequestParam(required = false) @Parameter(description = "Created at or after (ISO-8601)") Instant from,
+            @RequestParam(required = false) @Parameter(description = "Created at or before (ISO-8601)") Instant to,
+            @RequestParam(required = false) @Parameter(description = "Calendar day lower bound (yyyy-MM-dd), resolved in the application time zone (default Africa/Tunis); ignored when 'from' is present")
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+            @RequestParam(required = false) @Parameter(description = "Calendar day upper bound (yyyy-MM-dd, inclusive), resolved in the application time zone; ignored when 'to' is present")
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
-        return ResponseEntity.ok(auditService.search(action, entityId, actorId, pageable));
+        return ResponseEntity.ok(auditService.search(
+                new AuditQuery(action, entityType, entityId, actorId, source, from, to, fromDate, toDate), pageable));
     }
 
     @GetMapping("/{id}")

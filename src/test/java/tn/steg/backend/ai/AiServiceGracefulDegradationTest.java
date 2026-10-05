@@ -70,7 +70,7 @@ class AiServiceGracefulDegradationTest {
     private static final UUID ACTOR_ID = UUID.randomUUID();
     private static final UUID TARGET_ID = UUID.randomUUID();
 
-    private static final UserPrincipal ACTOR = new UserPrincipal(ACTOR_ID, "actor@test.tn", List.of("ROLE_HR"));
+    private static final UserPrincipal ACTOR = new UserPrincipal(ACTOR_ID, "actor@test.tn", List.of("ROLE_ADMIN"));
 
     private static final AssembledAiContent ASSEMBLED = new AssembledAiContent(
             "System instruction",
@@ -92,6 +92,7 @@ class AiServiceGracefulDegradationTest {
     @Mock CandidateAssistantContentAssembler candidateAssistantAssembler;
     @Mock tn.steg.backend.ai.domain.knowledge.StegKnowledgeBase knowledgeBase;
     @Mock tn.steg.backend.ai.domain.assembler.InternAssistantContentAssembler internAssistantAssembler;
+    @Mock tn.steg.backend.ai.domain.assembler.StaffAssistantContentAssembler staffAssistantAssembler;
     @Mock tn.steg.backend.ai.domain.service.LogbookFidelityGate fidelityChecker;
     @Mock tn.steg.backend.companion.domain.repository.InternshipJournalRepository journalRepository;
     @Mock tn.steg.backend.companion.domain.repository.JournalEntryRepository journalEntryRepository;
@@ -115,6 +116,7 @@ class AiServiceGracefulDegradationTest {
                 logbookAssembler,
                 candidateAssistantAssembler,
                 internAssistantAssembler,
+                staffAssistantAssembler,
                 knowledgeBase,
                 fidelityChecker,
                 journalRepository,

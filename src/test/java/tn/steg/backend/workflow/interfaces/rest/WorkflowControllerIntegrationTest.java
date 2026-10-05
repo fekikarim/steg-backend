@@ -113,12 +113,12 @@ class WorkflowControllerIntegrationTest {
     void applicationWorkflowLifecycle() throws Exception {
         University uni = universityRepository.saveAndFlush(new University("UNI_WF_1", "Test Uni WF"));
         Candidate candidate = createTestCandidate("cand_wf@test.tn", "11223399", uni);
-        User hrUser = createStaffUser("hr_wf@steg.com.tn", "ROLE_HR");
+        User hrUser = createStaffUser("hr_wf@steg.com.tn", "ADMIN");
 
         String hrToken = jwtService.generateAccessToken(
                 hrUser.getId(),
                 hrUser.getEmail(),
-                List.of("ROLE_HR")
+                List.of("ROLE_ADMIN")
         );
 
         // Candidate submits application
@@ -177,19 +177,22 @@ class WorkflowControllerIntegrationTest {
     void illegalTransitionRejectedByGuard() throws Exception {
         University uni = universityRepository.saveAndFlush(new University("UNI_WF_2", "Test Uni WF 2"));
         Candidate candidate = createTestCandidate("cand_wf2@test.tn", "11223398", uni);
-        User hrUser = createStaffUser("hr_wf2@steg.com.tn", "ROLE_HR");
+        User hrUser = createStaffUser("hr_wf2@steg.com.tn", "ADMIN");
 
         String hrToken = jwtService.generateAccessToken(
                 hrUser.getId(),
                 hrUser.getEmail(),
-                List.of("ROLE_HR")
+                List.of("ROLE_ADMIN")
         );
 
-        InternshipApplication app = new InternshipApplication("APP-2026-99998", candidate, ApplicationStatus.SUBMITTED);
+        // AGENTS.md §4: SUBMITTED is decidable directly (Scenario A), so the
+        // probe uses an already-decided application — the guard must still
+        // reject any decision on it.
+        InternshipApplication app = new InternshipApplication("APP-2026-99998", candidate, ApplicationStatus.APPROVED);
         app = applicationRepository.saveAndFlush(app);
         workflowService.spawnApplicationWorkflow(app);
 
-        // Attempt direct jump to FINAL_DECISION while app is still SUBMITTED -> 422 Unprocessable Entity
+        // Re-deciding an APPROVED application -> 409 In Conflict
         WorkflowTransitionRequest illegalRequest = new WorkflowTransitionRequest(
                 "FINAL_DECISION",
                 WorkflowActionType.APPROVAL,
@@ -201,7 +204,7 @@ class WorkflowControllerIntegrationTest {
                         .header("Authorization", "Bearer " + hrToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(illegalRequest)))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error").value("ILLEGAL_WORKFLOW_TRANSITION"));
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("INVALID_STATE_TRANSITION"));
     }
 }

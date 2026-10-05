@@ -20,4 +20,12 @@ public interface AuditLogRepository {
     Page<AuditLog> findByAction(String action, Pageable pageable);
     Page<AuditLog> findByEntityId(UUID entityId, Pageable pageable);
     Page<AuditLog> findByActorId(UUID actorId, Pageable pageable);
+
+    /**
+     * S9 combinable viewer search (§8.2): all filters AND together in one
+     * paged query, newest first.
+     */
+    Page<AuditLog> searchAudit(tn.steg.backend.audit.domain.model.AuditSource source,
+            String action, String entityType, UUID entityId, UUID actorId,
+            java.time.Instant from, java.time.Instant to, Pageable pageable);
 }

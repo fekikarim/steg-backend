@@ -8,7 +8,7 @@ import tn.steg.backend.workflow.domain.model.WorkflowActionType;
  *
  * @param targetStepCode The code of the step to transition into (e.g. "UNDER_REVIEW", "ACTIVE").
  * @param actionType     The type of action being performed (APPROVAL, VALIDATION, etc.)
- * @param decision       Optional decision (APPROVED, REJECTED, NEEDS_CORRECTION) for approval steps.
+ * @param decision       Optional decision (APPROVED, REJECTED, MODIFICATION_REQUESTED) for approval steps.
  * @param comment        Optional free-text rationale or correction comment.
  */
 public record WorkflowTransitionRequest(

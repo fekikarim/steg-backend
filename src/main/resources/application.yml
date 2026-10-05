@@ -3,6 +3,14 @@ spring:
     name: steg-backend
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:local}
+  # Unknown /api/* paths must reach the @RestControllerAdvice as
+  # NoHandlerFoundException (clean 404 envelope) instead of failing deeper
+  # with a generic 500.
+  mvc:
+    throw-exception-if-no-handler-found: true
+  web:
+    resources:
+      add-mappings: false
   messages:
     basename: messages/messages
     encoding: UTF-8
@@ -96,6 +104,9 @@ springdoc:
 
 # Custom STEG Platform Properties (Externalized)
 steg:
+  # Application time zone for every calendar-day date-range filter
+  # (candidates, applications, audit, notifications). Default Africa/Tunis.
+  timezone: ${APP_TIMEZONE:Africa/Tunis}
   security:
     jwt:
       issuer: steg-platform
@@ -164,7 +175,9 @@ steg:
     enabled: ${AI_ENABLED:false}
     provider: ${AI_PROVIDER:gemini}
     api-key: ${AI_API_KEY:${GEMINI_API_KEY:}}
-    model: ${AI_MODEL:gemini-3.8-flash}
+    # No hard-coded default: AI_MODEL wins, then GEMINI_MODEL, then blank
+    # (= "AI unavailable" degraded mode, never blocking).
+    model: ${AI_MODEL:${GEMINI_MODEL:}}
     base-url: ${AI_BASE_URL:https://generativelanguage.googleapis.com}
     timeout-ms: ${AI_TIMEOUT_MS:10000}
     max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:2048}

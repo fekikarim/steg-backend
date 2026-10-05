@@ -27,7 +27,7 @@ public class StegUserDetailsService implements UserDetailsService {
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> {
-                    log.debug("User not found with email: {}", email);
+                    log.debug("User not found during authentication (address redacted)");
                     return new UsernameNotFoundException("No account found with email: " + email);
                 });
 

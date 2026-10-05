@@ -53,6 +53,16 @@ public class Task extends BaseEntity {
     @Column(name = "completed_at")
     private Instant completedAt;
 
+    @Column(name = "review_reason", columnDefinition = "TEXT")
+    private String reviewReason;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "reviewed_by_id")
+    private User reviewedBy;
+
+    @Column(name = "reviewed_at")
+    private Instant reviewedAt;
+
     public Task(Internship internship, User createdBy, String title, String description) {
         this.internship = internship;
         this.createdBy = createdBy;

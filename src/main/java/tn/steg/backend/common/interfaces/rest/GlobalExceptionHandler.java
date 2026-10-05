@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
+import tn.steg.backend.common.domain.exception.ConflictException;
+import tn.steg.backend.common.domain.exception.InvalidStateTransitionException;
 import tn.steg.backend.common.domain.exception.RateLimitExceededException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.application.dto.ErrorEnvelope;
@@ -79,6 +81,34 @@ public class GlobalExceptionHandler {
         );
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(envelope);
     }
+    @ExceptionHandler(InvalidStateTransitionException.class)
+    public ResponseEntity<ErrorEnvelope> handleInvalidStateTransition(InvalidStateTransitionException ex, HttpServletRequest request) {
+        ErrorEnvelope envelope = buildEnvelope(
+                HttpStatus.CONFLICT,
+                "INVALID_STATE_TRANSITION",
+                ex.getMessage(),
+                request,
+                null
+        );
+        log.warn("Invalid state transition on path {}: {} -> {}: {}",
+                request.getRequestURI(), ex.getCurrentState(), ex.getRequestedTransition(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(envelope);
+    }
+
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ErrorEnvelope> handleConflict(ConflictException ex, HttpServletRequest request) {
+        ErrorEnvelope envelope = buildEnvelope(
+                HttpStatus.CONFLICT,
+                ex.getErrorCode(),
+                ex.getMessage(),
+                request,
+                null
+        );
+        log.warn("State conflict on path {} [{}]: {}",
+                request.getRequestURI(), ex.getErrorCode(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(envelope);
+    }
+
     @ExceptionHandler(BusinessRuleException.class)
     public ResponseEntity<ErrorEnvelope> handleBusinessRuleException(BusinessRuleException ex, HttpServletRequest request) {
         // AI validation service degraded – surface as 503 so clients can retry
@@ -95,14 +125,14 @@ public class GlobalExceptionHandler {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(envelope);
         }
         ErrorEnvelope envelope = buildEnvelope(
-                HttpStatus.UNPROCESSABLE_ENTITY,
+                HttpStatus.UNPROCESSABLE_CONTENT,
                 ex.getErrorCode(),
                 ex.getMessage(),
                 request,
                 null
         );
         log.warn("Business rule violation on path {}: {} - {}", request.getRequestURI(), ex.getErrorCode(), ex.getMessage());
-        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(envelope);
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT).body(envelope);
     }
 
     /**
@@ -132,14 +162,14 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ErrorEnvelope> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException ex, HttpServletRequest request) {        ErrorEnvelope envelope = buildEnvelope(
-                HttpStatus.PAYLOAD_TOO_LARGE,
+                HttpStatus.CONTENT_TOO_LARGE,
                 "FILE_TOO_LARGE",
                 "Uploaded file exceeds the maximum allowed size.",
                 request,
                 null
         );
         log.warn("Upload rejected on path {}: exceeds multipart ceiling", request.getRequestURI());
-        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(envelope);
+        return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE).body(envelope);
     }
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ErrorEnvelope> handleResourceNotFoundException(ResourceNotFoundException ex, HttpServletRequest request) {
@@ -170,6 +200,23 @@ public class GlobalExceptionHandler {
                 .body(envelope);
     }
 
+    @ExceptionHandler(tn.steg.backend.iam.domain.exception.BackOfficeAccessDeniedException.class)
+    public ResponseEntity<ErrorEnvelope> handleBackOfficeAccessDenied(
+            tn.steg.backend.iam.domain.exception.BackOfficeAccessDeniedException ex,
+            HttpServletRequest request) {
+        // Staff-only login gate: the Angular login screen maps error code
+        // BACK_OFFICE_DENIED to its localized "staff only" message.
+        ErrorEnvelope envelope = buildEnvelope(
+                HttpStatus.FORBIDDEN,
+                tn.steg.backend.iam.domain.exception.BackOfficeAccessDeniedException.ERROR_CODE,
+                "Back-office access is restricted to ADMIN and SUPERVISOR accounts.",
+                request,
+                null
+        );
+        log.warn("Back-office login refused on path {}: {}", request.getRequestURI(), ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(envelope);
+    }
+
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ErrorEnvelope> handleAccessDeniedException(AccessDeniedException ex, HttpServletRequest request) {
         ErrorEnvelope envelope = buildEnvelope(
@@ -179,7 +226,7 @@ public class GlobalExceptionHandler {
                 request,
                 null
         );
-        // Role-gated reports (e.g. SUPERVISOR -> HR reports) legitimately return 403
+        // Role-gated reports (e.g. SUPERVISOR -> ADMIN reports) legitimately return 403
         // as part of normal dashboard "unavailable" flow — not a security incident.
         if (isExpectedRoleGate(request)) {
             log.debug("Access denied (role gate) on path {}: {}", request.getRequestURI(), ex.getMessage());
@@ -234,6 +281,36 @@ public class GlobalExceptionHandler {
         );
         log.warn("Optimistic locking conflict on path {}: {}", request.getRequestURI(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.CONFLICT).body(envelope);
+    }
+
+    /** Unknown API path (no handler mapping): proper 404, not a 500. */
+    @ExceptionHandler(org.springframework.web.servlet.NoHandlerFoundException.class)
+    public ResponseEntity<ErrorEnvelope> handleNoHandlerFound(
+            org.springframework.web.servlet.NoHandlerFoundException ex, HttpServletRequest request) {
+        ErrorEnvelope envelope = buildEnvelope(
+                HttpStatus.NOT_FOUND,
+                "Not Found",
+                "The requested resource does not exist.",
+                request,
+                null
+        );
+        log.info("No handler for {} {}", request.getMethod(), request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(envelope);
+    }
+
+    /** Known path called with an unsupported HTTP verb: proper 405, not a 500. */
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorEnvelope> handleMethodNotSupported(
+            org.springframework.web.HttpRequestMethodNotSupportedException ex, HttpServletRequest request) {
+        ErrorEnvelope envelope = buildEnvelope(
+                HttpStatus.METHOD_NOT_ALLOWED,
+                "Method Not Allowed",
+                "HTTP method not allowed for this resource.",
+                request,
+                null
+        );
+        log.info("Method {} not supported on {}", request.getMethod(), request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(envelope);
     }
 
     @ExceptionHandler(Exception.class)

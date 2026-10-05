@@ -67,11 +67,14 @@ class OpenApiContractTest {
                 .isEqualTo("bearer");
 
         // All A0–A12 module surfaces must be present.
+        // S6b: the legacy GET /api/internships/{id}/workflow state endpoint is
+        // deleted with the workflow engine; the explicit lifecycle lives at
+        // POST /api/internships/{id}/status-transitions.
         JsonNode paths = root.path("paths");
         for (String expected : new String[]{
                 "/api/auth/register", "/api/auth/login", "/api/auth/refresh",
                 "/api/universities",
-                "/api/applications/{id}/workflow", "/api/internships/{id}/workflow",
+                "/api/applications/{id}/workflow",
                 "/api/documents", "/api/applications/{id}/documents",
                 "/api/audit", "/api/audit/{id}",
                 "/api/reports/applications-by-status", "/api/reports/payment-totals",
@@ -79,6 +82,9 @@ class OpenApiContractTest {
         }) {
             assertThat(paths.has(expected)).as("missing expected path %s", expected).isTrue();
         }
+        assertThat(paths.has("/api/internships/{id}/workflow"))
+                .as("legacy internship workflow endpoint must stay deleted (S6b)")
+                .isFalse();
 
         // Every operation must carry a non-empty summary.
         Iterator<String> pathNames = paths.fieldNames();

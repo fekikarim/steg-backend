@@ -13,7 +13,9 @@ import tn.steg.backend.application.domain.model.InternshipApplication;
 import tn.steg.backend.application.domain.repository.InternshipApplicationRepository;
 import tn.steg.backend.candidate.domain.model.Candidate;
 import tn.steg.backend.candidate.domain.repository.CandidateRepository;
+import tn.steg.backend.common.application.ApplicationTimeZone;
 import tn.steg.backend.common.application.idempotency.IdempotencyService;
+import tn.steg.backend.common.domain.event.ApplicationResubmittedEvent;
 import tn.steg.backend.common.domain.event.ApplicationSubmittedEvent;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
@@ -37,10 +39,10 @@ import java.util.UUID;
  * State machine (server-side enforcement):
  * <pre>
  *   DRAFT ──→ SUBMITTED (candidate; all mandatory docs present)
- *   SUBMITTED ──→ UNDER_REVIEW (ADMIN/HR)
- *   UNDER_REVIEW ──→ ACCEPTED | REJECTED | NEEDS_CORRECTION (ADMIN/HR)
- *   NEEDS_CORRECTION ──→ SUBMITTED (candidate resubmits)
- *   ANY ──→ WITHDRAWN (own candidate only, before ACCEPTED)
+ *   SUBMITTED ──→ UNDER_REVIEW (ADMIN) | APPROVED | REJECTED | MODIFICATION_REQUESTED (ADMIN)
+ *   MODIFICATION_REQUESTED ──→ RESUBMITTED (candidate resubmits)
+ *   RESUBMITTED ──→ UNDER_REVIEW | APPROVED | REJECTED | MODIFICATION_REQUESTED (ADMIN)
+ *   ANY ──→ WITHDRAWN (own candidate only, before APPROVED)
  * </pre>
  *
  * IDOR protection: every candidate-facing operation verifies the resource belongs to
@@ -63,6 +65,9 @@ public class ApplicationService {
     @Lazy
     private final WorkflowService workflowService;
 
+    /** Application time zone for server-stamped calendar dates (default Africa/Tunis). */
+    private final ApplicationTimeZone applicationTimeZone;
+
     /** Pure derivation engine (E1.1): clients receive calculatedType/requirement read-only. */
     private final InternshipClassificationService classificationService = new InternshipClassificationService();
 
@@ -72,7 +77,8 @@ public class ApplicationService {
                                 AuditService auditService,
                                 IdempotencyService idempotencyService,
                                 ApplicationEventPublisher eventPublisher,
-                                @Lazy WorkflowService workflowService) {
+                                @Lazy WorkflowService workflowService,
+                                ApplicationTimeZone applicationTimeZone) {
         this.applicationRepository = applicationRepository;
         this.candidateRepository   = candidateRepository;
         this.employeeRepository    = employeeRepository;
@@ -80,6 +86,7 @@ public class ApplicationService {
         this.idempotencyService    = idempotencyService;
         this.eventPublisher        = eventPublisher;
         this.workflowService       = workflowService;
+        this.applicationTimeZone   = applicationTimeZone;
     }
 
     // -------------------------------------------------------------------------
@@ -137,7 +144,7 @@ public class ApplicationService {
      */
     @Transactional(readOnly = true)
     public List<ApplicationResponse> listApplications(UserPrincipal actor) {
-        if (actor.hasRole("ADMIN") || actor.hasRole("HR")) {
+        if (actor.hasRole("ADMIN")) {
             // A14 N+1 fix: candidate + reviewer fetched in the list query itself.
             return applicationRepository.findAllWithCandidate().stream()
                     .map(ApplicationResponse::from)
@@ -216,20 +223,18 @@ public class ApplicationService {
     private ApplicationResponse doSubmitApplication(UUID id, UserPrincipal actor) {
         InternshipApplication application = resolveOwnCandidateApplicationOrThrow(id, actor);
 
-        // Idempotent replay without a key: a retry after a frontend timeout finds
-        // the already-committed SUBMITTED state and returns it instead of failing
-        // the transition — no duplicate workflow instance, no duplicate event.
-        // (Status change + workflow spawn commit atomically, so SUBMITTED always
-        // implies the workflow exists.)
-        if (application.getStatus() == ApplicationStatus.SUBMITTED) {
-            log.info("Application already SUBMITTED (replay): ref={}", application.getReference());
-            return ApplicationResponse.from(application);
-        }
-
+        // Duplicate handling is contractual: only DRAFT may be submitted.
+        // A keyless retry on an already-SUBMITTED application is refused with
+        // INVALID_STATUS_TRANSITION so clients reconcile state explicitly
+        // (GET the application) instead of assuming a fresh submission.
+        // Retries WITH an idempotency key replay the stored response via
+        // IdempotencyService before this method runs — no duplicate workflow
+        // instance, no duplicate event, identical response body.
         validateTransition(application, ApplicationStatus.DRAFT, ApplicationStatus.SUBMITTED);
 
         application.setStatus(ApplicationStatus.SUBMITTED);
-        application.setSubmissionDate(LocalDate.now());
+        // Server-stamped in the application time zone (default Africa/Tunis).
+        application.setSubmissionDate(applicationTimeZone.today());
         refreshDerivedClassification(application);
 
         application = applicationRepository.save(application);
@@ -249,15 +254,16 @@ public class ApplicationService {
     }
 
     /**
-     * Candidate withdraws their own application (→ WITHDRAWN), only if not yet ACCEPTED.
+     * Candidate withdraws their own application (→ WITHDRAWN), only if not yet APPROVED.
      */
     @Transactional
     public ApplicationResponse withdrawApplication(UUID id, UserPrincipal actor) {
         InternshipApplication application = resolveOwnCandidateApplicationOrThrow(id, actor);
 
-        if (application.getStatus() == ApplicationStatus.ACCEPTED) {
+        if (application.getStatus() == ApplicationStatus.APPROVED
+            || application.getStatus() == ApplicationStatus.APPROVED) {
             throw new BusinessRuleException("APPLICATION_WITHDRAWAL_NOT_ALLOWED",
-                    "An ACCEPTED application cannot be withdrawn.");
+                    "An APPROVED application cannot be withdrawn.");
         }
         if (application.getStatus() == ApplicationStatus.WITHDRAWN) {
             throw new BusinessRuleException("APPLICATION_ALREADY_WITHDRAWN",
@@ -287,22 +293,34 @@ public class ApplicationService {
     // SUBMITTED → UNDER_REVIEW → FINAL_DECISION transitions.
 
     /**
-     * Candidate resubmits after corrections (NEEDS_CORRECTION → SUBMITTED).
+     * Candidate resubmits after corrections (MODIFICATION_REQUESTED → RESUBMITTED,
+     * AGENTS.md §4). The legacy NEEDS_CORRECTION status was migrated to
+     * MODIFICATION_REQUESTED by V39 and is no longer accepted.
      */
     @Transactional
     public ApplicationResponse resubmitApplication(UUID id, UserPrincipal actor) {
         InternshipApplication application = resolveOwnCandidateApplicationOrThrow(id, actor);
-        validateTransition(application, ApplicationStatus.NEEDS_CORRECTION, ApplicationStatus.SUBMITTED);
+        if (application.getStatus() != ApplicationStatus.MODIFICATION_REQUESTED) {
+            throw new tn.steg.backend.common.domain.exception.InvalidStateTransitionException(
+                application.getStatus().name(), ApplicationStatus.RESUBMITTED.name(),
+                "Cannot resubmit from application status: " + application.getStatus());
+        }
 
-        application.setStatus(ApplicationStatus.SUBMITTED);
-        application.setSubmissionDate(LocalDate.now());
+        application.setStatus(ApplicationStatus.RESUBMITTED);
+        // Server-stamped in the application time zone (default Africa/Tunis).
+        application.setSubmissionDate(applicationTimeZone.today());
         application.setCorrectionComment(null);
 
         application = applicationRepository.save(application);
         log.info("Application resubmitted: ref={}", application.getReference());
         auditService.log("APPLICATION_RESUBMITTED", "InternshipApplication", id,
-                Map.of("status", ApplicationStatus.NEEDS_CORRECTION.toString()),
-                Map.of("status", ApplicationStatus.SUBMITTED.toString()), actor.getId(), null);
+                Map.of("status", ApplicationStatus.MODIFICATION_REQUESTED.toString()),
+                Map.of("status", ApplicationStatus.RESUBMITTED.toString()), actor.getId(), null);
+        // AGENTS.md §8.1: a resubmission is a new review request — every Admin
+        // must be notified (the candidate already knows they resubmitted).
+        eventPublisher.publishEvent(new ApplicationResubmittedEvent(
+                application.getId(), application.getReference(),
+                application.getCandidate().getUser().getId(), actor.getId()));
         return ApplicationResponse.from(application);
     }
 
@@ -361,7 +379,10 @@ public class ApplicationService {
                                     ApplicationStatus expectedCurrent,
                                     ApplicationStatus target) {
         if (app.getStatus() != expectedCurrent) {
-            throw new BusinessRuleException("INVALID_STATUS_TRANSITION",
+            // AGENTS.md §4: an invalid transition is a 409 with a clear message.
+            throw new tn.steg.backend.common.domain.exception.InvalidStateTransitionException(
+                    app.getStatus() != null ? app.getStatus().name() : "NULL",
+                    target.name(),
                     String.format("Cannot transition to %s from %s. Expected current status: %s.",
                             target, app.getStatus(), expectedCurrent));
         }
@@ -373,7 +394,7 @@ public class ApplicationService {
      * - ADMIN / HR: can access any.
      */
     private InternshipApplication resolveWithIdorCheck(UUID id, UserPrincipal actor) {
-        if (actor.hasRole("ADMIN") || actor.hasRole("HR")) {
+        if (actor.hasRole("ADMIN")) {
             return findApplicationOrThrow(id);
         }
 

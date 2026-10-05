@@ -88,9 +88,7 @@ class ReportControllerTest {
     private final Map<String, User> roleUsers = new java.util.HashMap<>();
 
     private String adminToken;
-    private String directorToken;
-    private String hrToken;
-    private String financeToken;
+    private String supervisorToken;
     private String candidateToken;
 
     private Department departmentAlpha;
@@ -102,9 +100,7 @@ class ReportControllerTest {
         mockMvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
 
         adminToken = tokenForRole("ADMIN");
-        directorToken = tokenForRole("DIRECTOR");
-        hrToken = tokenForRole("HR");
-        financeToken = tokenForRole("FINANCE");
+        supervisorToken = tokenForRole("SUPERVISOR");
         candidateToken = tokenForRole("CANDIDATE");
 
         University uni = universityRepository.saveAndFlush(new University("RP-UNI", "Report University"));
@@ -128,29 +124,29 @@ class ReportControllerTest {
         adminEmployee.setUser(adminUser);
         employeeRepository.saveAndFlush(adminEmployee);
 
-        // 2 applications: DRAFT + ACCEPTED (E1: one per candidate — two candidates)
+        // 2 applications: DRAFT + APPROVED (E1: one per candidate — two candidates)
         Candidate candidate2 = new Candidate("Report", "Second", "report_second@steg.tn", "RP-000001", uni);
         candidate2 = candidateRepository.saveAndFlush(candidate2);
         InternshipApplication draftApp = new InternshipApplication("APP-RP-DRAFT", candidate, ApplicationStatus.DRAFT);
-        InternshipApplication acceptedApp = new InternshipApplication("APP-RP-ACC", candidate2, ApplicationStatus.ACCEPTED);
+        InternshipApplication acceptedApp = new InternshipApplication("APP-RP-ACC", candidate2, ApplicationStatus.APPROVED);
         applicationRepository.saveAndFlush(draftApp);
         applicationRepository.saveAndFlush(acceptedApp);
 
-        // 3 internships: (OBSERVATION, ACTIVE, dept A) assigned, (PERFECTIONNEMENT, COMPLETED, dept B) assigned, (OBSERVATION, PLANNED, unassigned)
+        // 3 internships: (OBSERVATION, IN_PROGRESS, dept A) assigned, (PERFECTIONNEMENT, VALIDATED, dept B) assigned, (OBSERVATION, APPROVED, unassigned)
         Internship internshipActive = internshipRepository.saveAndFlush(new Internship(
                 "INT-RP-1", candidate, LocalDate.of(2026, 7, 1), LocalDate.of(2026, 8, 31),
                 InternshipType.OBSERVATION, InternshipRequirement.OBLIGATOIRE));
-        internshipActive.setStatus(InternshipStatus.ACTIVE);
+        internshipActive.setStatus(InternshipStatus.IN_PROGRESS);
 
         Internship internshipCompleted = internshipRepository.saveAndFlush(new Internship(
                 "INT-RP-2", candidate, LocalDate.of(2026, 1, 5), LocalDate.of(2026, 2, 20),
                 InternshipType.PERFECTIONNEMENT, InternshipRequirement.OPTIONAL));
-        internshipCompleted.setStatus(InternshipStatus.COMPLETED);
+        internshipCompleted.setStatus(InternshipStatus.VALIDATED);
 
         Internship internshipPlanned = internshipRepository.saveAndFlush(new Internship(
                 "INT-RP-3", candidate, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30),
                 InternshipType.OBSERVATION, InternshipRequirement.OBLIGATOIRE));
-        internshipPlanned.setStatus(InternshipStatus.PLANNED);
+        internshipPlanned.setStatus(InternshipStatus.APPROVED);
 
         internshipAssignmentRepository.saveAndFlush(new InternshipAssignment(
                 internshipActive, departmentAlpha, supAlpha, adminEmployee,
@@ -188,7 +184,8 @@ class ReportControllerTest {
     void unauthenticatedRejected() throws Exception {
         for (String path : new String[]{"/api/reports/applications-by-status", "/api/reports/internships-by-type",
                 "/api/reports/internships-by-status", "/api/reports/internships-by-department",
-                "/api/reports/finance-cases-by-status", "/api/reports/payment-totals"}) {
+                "/api/reports/finance-cases-by-status", "/api/reports/payment-totals",
+                "/api/reports/admin-summary", "/api/reports/supervisor-summary"}) {
             mockMvc.perform(get(path)).andExpect(status().isUnauthorized());
         }
     }
@@ -198,48 +195,35 @@ class ReportControllerTest {
     void candidateForbiddenEverywhere() throws Exception {
         for (String path : new String[]{"/api/reports/applications-by-status", "/api/reports/internships-by-type",
                 "/api/reports/internships-by-status", "/api/reports/internships-by-department",
-                "/api/reports/finance-cases-by-status", "/api/reports/payment-totals"}) {
+                "/api/reports/finance-cases-by-status", "/api/reports/payment-totals",
+                "/api/reports/admin-summary", "/api/reports/supervisor-summary"}) {
             mockMvc.perform(get(path).header("Authorization", "Bearer " + candidateToken))
                     .andExpect(status().isForbidden());
         }
     }
 
     @Test
-    @DisplayName("HR sees planning reports but is forbidden from treasury reports")
-    void hrPlanningScope() throws Exception {
-        mockMvc.perform(get("/api/reports/applications-by-status").header("Authorization", "Bearer " + hrToken))
-                .andExpect(status().isOk());
-        mockMvc.perform(get("/api/reports/internships-by-type").header("Authorization", "Bearer " + hrToken))
-                .andExpect(status().isOk());
-        mockMvc.perform(get("/api/reports/internships-by-status").header("Authorization", "Bearer " + hrToken))
-                .andExpect(status().isOk());
-        mockMvc.perform(get("/api/reports/internships-by-department").header("Authorization", "Bearer " + hrToken))
-                .andExpect(status().isOk());
-        mockMvc.perform(get("/api/reports/finance-cases-by-status").header("Authorization", "Bearer " + hrToken))
-                .andExpect(status().isForbidden());
-        mockMvc.perform(get("/api/reports/payment-totals").header("Authorization", "Bearer " + hrToken))
-                .andExpect(status().isForbidden());
-    }
-
-    @Test
-    @DisplayName("FINANCE sees treasury reports but is forbidden from planning reports")
-    void financeTreasuryScope() throws Exception {
-        mockMvc.perform(get("/api/reports/applications-by-status").header("Authorization", "Bearer " + financeToken))
-                .andExpect(status().isForbidden());
-        mockMvc.perform(get("/api/reports/finance-cases-by-status").header("Authorization", "Bearer " + financeToken))
-                .andExpect(status().isOk());
-        mockMvc.perform(get("/api/reports/payment-totals").header("Authorization", "Bearer " + financeToken))
-                .andExpect(status().isOk());
-    }
-
-    @Test
-    @DisplayName("ADMIN and DIRECTOR can read every report endpoint")
-    void adminAndDirectorFullAccess() throws Exception {
+    @DisplayName("SUPERVISOR is forbidden from the ADMIN-only report endpoints (supervisor-summary stays open)")
+    void supervisorForbiddenEverywhere() throws Exception {
         for (String path : new String[]{"/api/reports/applications-by-status", "/api/reports/internships-by-type",
                 "/api/reports/internships-by-status", "/api/reports/internships-by-department",
-                "/api/reports/finance-cases-by-status", "/api/reports/payment-totals"}) {
+                "/api/reports/finance-cases-by-status", "/api/reports/payment-totals",
+                "/api/reports/admin-summary"}) {
+            mockMvc.perform(get(path).header("Authorization", "Bearer " + supervisorToken))
+                    .andExpect(status().isForbidden());
+        }
+        mockMvc.perform(get("/api/reports/supervisor-summary").header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("ADMIN can read every report endpoint")
+    void adminFullAccess() throws Exception {
+        for (String path : new String[]{"/api/reports/applications-by-status", "/api/reports/internships-by-type",
+                "/api/reports/internships-by-status", "/api/reports/internships-by-department",
+                "/api/reports/finance-cases-by-status", "/api/reports/payment-totals",
+                "/api/reports/admin-summary", "/api/reports/supervisor-summary"}) {
             mockMvc.perform(get(path).header("Authorization", "Bearer " + adminToken)).andExpect(status().isOk());
-            mockMvc.perform(get(path).header("Authorization", "Bearer " + directorToken)).andExpect(status().isOk());
         }
     }
 
@@ -249,7 +233,7 @@ class ReportControllerTest {
         mockMvc.perform(get("/api/reports/applications-by-status").header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.groupName=='DRAFT')].count").value(1))
-                .andExpect(jsonPath("$[?(@.groupName=='ACCEPTED')].count").value(1))
+                .andExpect(jsonPath("$[?(@.groupName=='APPROVED')].count").value(1))
                 .andExpect(jsonPath("$.length()").value(2));
     }
 
@@ -263,9 +247,9 @@ class ReportControllerTest {
 
         mockMvc.perform(get("/api/reports/internships-by-status").header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[?(@.groupName=='ACTIVE')].count").value(1))
-                .andExpect(jsonPath("$[?(@.groupName=='COMPLETED')].count").value(1))
-                .andExpect(jsonPath("$[?(@.groupName=='PLANNED')].count").value(1));
+                .andExpect(jsonPath("$[?(@.groupName=='IN_PROGRESS')].count").value(1))
+                .andExpect(jsonPath("$[?(@.groupName=='VALIDATED')].count").value(1))
+                .andExpect(jsonPath("$[?(@.groupName=='APPROVED')].count").value(1));
 
         mockMvc.perform(get("/api/reports/internships-by-department").header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
@@ -286,7 +270,7 @@ class ReportControllerTest {
     @Test
     @DisplayName("payment-totals rolls up amount+count by period and department, and supports department filter")
     void paymentTotals() throws Exception {
-        mockMvc.perform(get("/api/reports/payment-totals").header("Authorization", "Bearer " + financeToken))
+        mockMvc.perform(get("/api/reports/payment-totals").header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].year").value(2026))
@@ -296,13 +280,13 @@ class ReportControllerTest {
                 .andExpect(jsonPath("$[0].receiptCount").value(1));
 
         mockMvc.perform(get("/api/reports/payment-totals").param("departmentId", departmentAlphaId.toString())
-                        .header("Authorization", "Bearer " + financeToken))
+                        .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].departmentCode").value("RP-DEV"));
 
         mockMvc.perform(get("/api/reports/payment-totals").param("departmentId", java.util.UUID.randomUUID().toString())
-                        .header("Authorization", "Bearer " + financeToken))
+                        .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isNotFound());
     }
 }

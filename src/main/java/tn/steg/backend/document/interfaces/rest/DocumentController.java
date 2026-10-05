@@ -129,7 +129,7 @@ public class DocumentController {
     // -------------------------------------------------------------------------
 
     @GetMapping("/api/applications/{id}/documents")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'CANDIDATE')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'CANDIDATE')")
     @Operation(summary = "List documents attached to an application")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Attached application documents"),
@@ -143,7 +143,7 @@ public class DocumentController {
     }
 
     @PostMapping("/api/applications/{id}/documents")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'CANDIDATE')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'CANDIDATE')")
     @Operation(summary = "Attach an existing document to an application")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Document attached"),
@@ -161,13 +161,13 @@ public class DocumentController {
     }
 
     @PutMapping("/api/applications/{id}/documents/{documentId}/verify")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Verify (accept/reject) an application document")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Verification recorded"),
             @ApiResponse(responseCode = "400", description = "Invalid verification state"),
             @ApiResponse(responseCode = "401", description = "Not authenticated"),
-            @ApiResponse(responseCode = "403", description = "Requires ADMIN or HR"),
+            @ApiResponse(responseCode = "403", description = "Requires ADMIN"),
             @ApiResponse(responseCode = "404", description = "Application document not found")
     })
     public ResponseEntity<ApplicationDocumentResponse> verifyApplicationDocument(
@@ -183,7 +183,7 @@ public class DocumentController {
     // -------------------------------------------------------------------------
 
     @GetMapping("/api/internships/{id}/documents")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR', 'CANDIDATE', 'SUPERVISOR')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'CANDIDATE', 'SUPERVISOR')")
     @Operation(summary = "List documents attached to an internship")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Attached internship documents"),
@@ -197,13 +197,13 @@ public class DocumentController {
     }
 
     @PostMapping("/api/internships/{id}/documents")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Attach an existing document to an internship")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Document attached"),
             @ApiResponse(responseCode = "400", description = "Invalid payload"),
             @ApiResponse(responseCode = "401", description = "Not authenticated"),
-            @ApiResponse(responseCode = "403", description = "Requires ADMIN or HR"),
+            @ApiResponse(responseCode = "403", description = "Requires ADMIN"),
             @ApiResponse(responseCode = "404", description = "Internship or document not found"),
             @ApiResponse(responseCode = "409", description = "Document already attached")
     })

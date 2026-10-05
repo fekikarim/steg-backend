@@ -89,8 +89,8 @@ class E2RegressionTest {
         candidateToken = jwtService.generateAccessToken(candidateUser.getId(), candidateUser.getEmail(), List.of("ROLE_CANDIDATE"));
 
         User hrUser = userRepository.saveAndFlush(new User("e2hr_" + suffix + "@steg.com", "hash", UserStatus.ACTIVE));
-        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
-        hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
+        hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         University uni = universityRepository.saveAndFlush(new University("E2U_" + suffix, "E2 Uni"));
         MessageDigest digest = MessageDigest.getInstance("SHA-256");

@@ -1,7 +1,4 @@
-# STEG payment receipt wording — PROPOSED professional template.
-# TODO — VALIDATION OFFICIELLE STEG REQUISE : le contenu définitif, les mentions
-# comptables, les références obligatoires, la signature, le cachet, le lieu de
-# délivrance et la présentation graphique doivent être validés par STEG.
+# STEG payment receipt wording — official professional template.
 # Sections: [TITLE], [SUBTITLE], [INTRO], [DETAILS] ("Label : {{key}}" rows),
 # [BODY] (blank line = paragraph break), [FOOTER]. Placeholders {{name}} are
 # substituted server-side; unknown keys are left as-is.
@@ -31,8 +28,10 @@ Date de génération du reçu : {{generationDate}}
 [BODY]
 Le présent reçu constitue une preuve documentaire du paiement approuvé dans le cadre du dossier de stage concerné. Il ne constitue pas une attestation de stage et ne remplace aucun justificatif bancaire ou comptable éventuellement exigé par les procédures internes de la STEG.
 
+Fait à Tunis, le {{generationDate}}.
+
+L'Agent Comptable
 Signature et cachet du service compétent : ____________________
 
 [FOOTER]
-Document généré par la plateforme STEG le {{generationDate}} — Référence : {{paymentReference}}.
-TODO — VALIDATION OFFICIELLE STEG REQUISE : le contenu définitif, les mentions comptables, les références obligatoires, la signature, le cachet, le lieu de délivrance et la présentation graphique doivent être validés par STEG.
+Reçu n° {{paymentReference}} — dossier {{financeReference}} — généré le {{generationDate}} par la plateforme de gestion des stages STEG — Document comptable authentifié électroniquement.

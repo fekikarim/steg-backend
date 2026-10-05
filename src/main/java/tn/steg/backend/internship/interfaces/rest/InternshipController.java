@@ -10,6 +10,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.common.domain.exception.BusinessRuleException;
+import tn.steg.backend.internship.application.InternshipLifecycleService;
 import tn.steg.backend.internship.application.InternshipService;
 import tn.steg.backend.internship.application.dto.*;
 
@@ -23,35 +25,38 @@ import java.util.UUID;
 public class InternshipController {
 
     private final InternshipService internshipService;
+    private final InternshipLifecycleService internshipLifecycleService;
 
     // -------------------------------------------------------------------------
     // Querying
     // -------------------------------------------------------------------------
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR', 'SUPERVISOR')")
+    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'SUPERVISOR')")
     @GetMapping
     @Operation(summary = "List all internships (staff only)")
-    public ResponseEntity<List<InternshipResponse>> listInternships() {
-        return ResponseEntity.ok(internshipService.listInternships());
+    public ResponseEntity<List<InternshipResponse>> listInternships(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(internshipService.listInternships(principal));
     }
 
-    // A14 IDOR fix: candidates may read ONLY their own internship. Staff keep
-    // wide read (consistent with the staff-only list endpoint); cross-candidate
-    // reads previously passed the role-only gate and leaked candidateFullName.
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR', 'SUPERVISOR') or @authz.isInternOf(#id)")
+    // A14 IDOR fix: candidates may read ONLY their own internship. The scope is
+    // enforced in the service (404, no oracle); the method-security gate stays
+    // open for authenticated users so an out-of-scope read is 404, not 403.
+    @PreAuthorize("isAuthenticated()")
     @GetMapping("/{id}")
     @Operation(summary = "Get internship details by ID")
-    public ResponseEntity<InternshipResponse> getInternship(@PathVariable UUID id) {
-        return ResponseEntity.ok(internshipService.getInternship(id));
+    public ResponseEntity<InternshipResponse> getInternship(@PathVariable UUID id,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(internshipService.getInternship(id, principal));
     }
 
     // -------------------------------------------------------------------------
     // Creation
     // -------------------------------------------------------------------------
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @PostMapping("/from-application")
-    @Operation(summary = "Create an internship from an ACCEPTED application",
+    @Operation(summary = "Create an internship from an APPROVED application",
                description = "Copies candidate, proposed subject and dates. Computes deterministic classification.")
     public ResponseEntity<InternshipResponse> createFromApplication(
             @Valid @RequestBody InternshipCreateFromApplicationRequest request,
@@ -60,7 +65,7 @@ public class InternshipController {
                 .body(internshipService.createFromApplication(request, principal));
     }
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @PostMapping("/manual")
     @Operation(summary = "Manually create an internship for a candidate",
                description = "Computes deterministic classification based on date boundaries.")
@@ -75,7 +80,36 @@ public class InternshipController {
     // Dates Update & Reclassification
     // -------------------------------------------------------------------------
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    // -------------------------------------------------------------------------
+    // Explicit lifecycle (AGENTS.md §4)
+    // -------------------------------------------------------------------------
+
+    @PreAuthorize("@authz.hasRole('ADMIN')")
+    @PostMapping("/{id}/status-transitions")
+    @Operation(summary = "Advance an internship along the explicit status model",
+               description = "APPROVED → IN_PROGRESS → REPORT_SUBMITTED → UNDER_VALIDATION → VALIDATED "
+                       + "→ RECEIPT_ISSUED. Any other pair returns 409. Admin-only; the intern report "
+                       + "channel drives the same service internally.")
+    public ResponseEntity<InternshipResponse> transitionStatus(
+            @PathVariable UUID id,
+            @Valid @RequestBody InternshipStatusTransitionRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        // S6b: VALIDATED and RECEIPT_ISSUED are RESERVED for the validation use
+        // case (AGENTS.md §5.11). They may only be reached by the Admin's manual
+        // per-document decision and by the (idempotent) payment-receipt
+        // generation — never by a bare status call, which would let anyone skip
+        // the decision. Enforced HERE so every caller of this endpoint is
+        // covered, including future ones.
+        if (InternshipLifecycleService.RESERVED_FOR_VALIDATION.contains(request.targetStatus())) {
+            throw new BusinessRuleException("INTERNSHIP_STATUS_RESERVED",
+                    request.targetStatus() + " is only reachable through the internship validation "
+                            + "decision and the payment receipt (AGENTS.md §5.11).");
+        }
+        return ResponseEntity.ok(internshipLifecycleService.transition(
+                id, request.targetStatus(), request.comment(), principal));
+    }
+
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @PutMapping("/{id}/dates")
     @Operation(summary = "Update internship dates and trigger reclassification",
                description = "Automatically recomputes type and requirement; client cannot dictate them.")
@@ -90,7 +124,7 @@ public class InternshipController {
     // Cancellation
     // -------------------------------------------------------------------------
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @PostMapping("/{id}/cancel")
     @Operation(summary = "Cancel an internship")
     public ResponseEntity<InternshipResponse> cancelInternship(
@@ -103,7 +137,7 @@ public class InternshipController {
     // Assignments
     // -------------------------------------------------------------------------
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @PostMapping("/{id}/assignments")
     @Operation(summary = "Assign or reassign an internship",
                description = "Atomically ends any current ACTIVE assignment and activates the new one.")
@@ -115,7 +149,7 @@ public class InternshipController {
                 .body(internshipService.assign(id, request, principal));
     }
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR', 'SUPERVISOR')")
+    @PreAuthorize("@authz.hasRole('ADMIN') or @authz.isSupervisorOf(#id)")
     @GetMapping("/{id}/assignments")
     @Operation(summary = "List assignment history for an internship")
     public ResponseEntity<List<InternshipAssignmentResponse>> listAssignments(@PathVariable UUID id) {
@@ -126,7 +160,7 @@ public class InternshipController {
     // Transparency / Classification Explanation
     // -------------------------------------------------------------------------
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR', 'SUPERVISOR') or @authz.isInternOf(#id)")
+    @PreAuthorize("@authz.hasRole('ADMIN') or @authz.isSupervisorOf(#id) or @authz.isInternOf(#id)")
     @GetMapping("/{id}/classification")
     @Operation(summary = "Get computed classification explanation",
                description = "Exposes computed type, requirement, payment eligibility, duration in days, and rule rationale.")

@@ -149,7 +149,7 @@ class MessagingWebSocketIntegrationTest {
         candidate.setNationalIdEncrypted("CIN" + suffix);
         candidate = candidateRepository.saveAndFlush(candidate);
 
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
         InternshipResponse created = internshipService.createManual(new InternshipCreateManualRequest(
                 candidate.getId(), LocalDate.now().minusDays(3), LocalDate.now().plusDays(60),
                 "WS Project", "Ingénieur", false), hrPrincipal);

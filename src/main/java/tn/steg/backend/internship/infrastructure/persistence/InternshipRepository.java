@@ -39,4 +39,38 @@ public interface InternshipRepository extends JpaRepository<Internship, UUID>, t
 
     @Query("select i from Internship i where i.candidate.user.id = :userId and i.status = :status")
     List<Internship> findByCandidateUserIdAndStatus(@Param("userId") UUID userId, @Param("status") InternshipStatus status);
+
+    @Query("select i from Internship i where i.supervisorUser.id = :supervisorUserId")
+    List<Internship> findBySupervisorUserId(@Param("supervisorUserId") UUID supervisorUserId);
+
+    /**
+     * S7 validation queue (§5.11 step 1): Admin-only, one paged query with
+     * explicit JOINs (NULL supervisor/university rows are kept) and the
+     * filters mirrored in the count query. Sort/whitelist + size clamp live in
+     * the application service, like the other staff queues.
+     */
+    @Query(value = "SELECT DISTINCT i FROM Internship i "
+            + "LEFT JOIN FETCH i.candidate c LEFT JOIN FETCH c.university u LEFT JOIN FETCH i.supervisorUser s "
+            + "WHERE (:statusesEmpty = TRUE OR i.status IN :statuses) "
+            + "AND (:supervisorUserId IS NULL OR s.id = :supervisorUserId) "
+            + "AND (:universityId IS NULL OR u.id = :universityId) "
+            + "AND (:type IS NULL OR i.type = :type) "
+            + "AND (:pattern IS NULL OR LOWER(c.firstName) LIKE :pattern OR LOWER(c.lastName) LIKE :pattern "
+            + "OR LOWER(c.email) LIKE :pattern OR LOWER(i.reference) LIKE :pattern)",
+            countQuery = "SELECT COUNT(DISTINCT i) FROM Internship i "
+                    + "LEFT JOIN i.candidate c LEFT JOIN c.university u LEFT JOIN i.supervisorUser s "
+                    + "WHERE (:statusesEmpty = TRUE OR i.status IN :statuses) "
+                    + "AND (:supervisorUserId IS NULL OR s.id = :supervisorUserId) "
+                    + "AND (:universityId IS NULL OR u.id = :universityId) "
+                    + "AND (:type IS NULL OR i.type = :type) "
+                    + "AND (:pattern IS NULL OR LOWER(c.firstName) LIKE :pattern OR LOWER(c.lastName) LIKE :pattern "
+                    + "OR LOWER(c.email) LIKE :pattern OR LOWER(i.reference) LIKE :pattern)")
+    org.springframework.data.domain.Page<Internship> searchValidationQueue(
+            @Param("statusesEmpty") boolean statusesEmpty,
+            @Param("statuses") java.util.Collection<InternshipStatus> statuses,
+            @Param("supervisorUserId") UUID supervisorUserId,
+            @Param("universityId") UUID universityId,
+            @Param("type") tn.steg.backend.internship.domain.model.InternshipType type,
+            @Param("pattern") String pattern,
+            org.springframework.data.domain.Pageable pageable);
 }

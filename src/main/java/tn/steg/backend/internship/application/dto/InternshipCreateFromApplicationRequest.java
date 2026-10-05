@@ -11,5 +11,11 @@ public record InternshipCreateFromApplicationRequest(
         UUID applicationId,
 
         @Schema(description = "Explicit flag for observation internship: true for OBLIGATOIRE, false for OPTIONAL. If null, conservatively defaults to OPTIONAL.")
-        Boolean observationObligatoire
-) {}
+        Boolean observationObligatoire,
+
+        UUID supervisorUserId
+) {
+    public InternshipCreateFromApplicationRequest(UUID applicationId, Boolean observationObligatoire) {
+        this(applicationId, observationObligatoire, null);
+    }
+}

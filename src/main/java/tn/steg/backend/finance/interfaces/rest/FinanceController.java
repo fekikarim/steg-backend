@@ -49,7 +49,7 @@ public class FinanceController {
     private final FinanceService financeService;
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('FINANCE', 'ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Open a finance case for a COMPLETED OBLIGATOIRE internship")
     public ResponseEntity<FinanceCaseResponse> openFinanceCase(
             @Valid @RequestBody OpenFinanceCaseRequest request,
@@ -59,23 +59,26 @@ public class FinanceController {
     }
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('FINANCE', 'ADMIN')")
-    @Operation(summary = "List finance cases, optionally filtered by status")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
+    @Operation(summary = "List finance cases, optionally filtered by status (supervisors see assigned cases only)")
     public ResponseEntity<Page<FinanceCaseResponse>> listFinanceCases(
             @RequestParam(required = false) FinanceCaseStatus status,
-            @PageableDefault(size = 20, sort = "openedAt", direction = Sort.Direction.DESC) Pageable pageable) {
-        return ResponseEntity.ok(financeService.listFinanceCases(status, pageable));
+            @PageableDefault(size = 20, sort = "openedAt", direction = Sort.Direction.DESC) Pageable pageable,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(financeService.listFinanceCases(status, pageable, actor));
     }
 
     @GetMapping("/{id}")
-    @PreAuthorize("hasAnyRole('FINANCE', 'ADMIN')")
-    @Operation(summary = "Get a finance case with calculation, dossier and approval history")
-    public ResponseEntity<FinanceCaseResponse> getFinanceCase(@PathVariable UUID id) {
-        return ResponseEntity.ok(financeService.getFinanceCase(id));
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
+    @Operation(summary = "Get a finance case with calculation, dossier and approval history (supervisors: assigned cases only)")
+    public ResponseEntity<FinanceCaseResponse> getFinanceCase(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(financeService.getFinanceCase(id, actor));
     }
 
     @PostMapping("/{id}/documents")
-    @PreAuthorize("hasAnyRole('FINANCE', 'ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Attach an uploaded document to the finance dossier")
     public ResponseEntity<FinanceCaseDocumentResponse> attachDocument(
             @PathVariable UUID id,
@@ -86,7 +89,7 @@ public class FinanceController {
     }
 
     @PatchMapping("/{id}/documents/{documentId}")
-    @PreAuthorize("hasAnyRole('FINANCE', 'ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Review (verify) one dossier document")
     public ResponseEntity<FinanceCaseDocumentResponse> reviewDocument(
             @PathVariable UUID id,
@@ -97,7 +100,7 @@ public class FinanceController {
     }
 
     @PostMapping("/{id}/recalculate")
-    @PreAuthorize("hasAnyRole('FINANCE', 'ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Recompute the payment snapshot (pre-decision only, audited)")
     public ResponseEntity<FinanceCaseResponse> recalculate(
             @PathVariable UUID id,
@@ -106,8 +109,8 @@ public class FinanceController {
     }
 
     @PostMapping("/{id}/approve")
-    @PreAuthorize("hasRole('FINANCE')")
-    @Operation(summary = "Approve payment and issue the receipt (FINANCE role only)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
+    @Operation(summary = "Approve payment and issue the receipt (ADMIN, or assigned supervisor)")
     public ResponseEntity<FinanceCaseResponse> approve(
             @PathVariable UUID id,
             @RequestBody(required = false) PaymentDecisionRequest request,
@@ -116,8 +119,8 @@ public class FinanceController {
     }
 
     @PostMapping("/{id}/reject")
-    @PreAuthorize("hasRole('FINANCE')")
-    @Operation(summary = "Reject payment with a mandatory reason (FINANCE role only)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
+    @Operation(summary = "Reject payment with a mandatory reason (ADMIN, or assigned supervisor)")
     public ResponseEntity<FinanceCaseResponse> reject(
             @PathVariable UUID id,
             @Valid @RequestBody PaymentDecisionRequest request,
@@ -127,7 +130,7 @@ public class FinanceController {
 
     @GetMapping("/{id}/receipt")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "Download the payment receipt PDF (FINANCE/ADMIN/HR or internship supervisor)")
+    @Operation(summary = "Download the payment receipt PDF (ADMIN or assigned supervisor)")
     public ResponseEntity<InputStreamResource> downloadReceipt(
             @PathVariable UUID id,
             @AuthenticationPrincipal UserPrincipal actor,

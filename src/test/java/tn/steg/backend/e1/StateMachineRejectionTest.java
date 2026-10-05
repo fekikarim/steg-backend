@@ -35,22 +35,26 @@ import tn.steg.backend.TestcontainersConfiguration;
 import tn.steg.backend.application.domain.model.ApplicationStatus;
 import tn.steg.backend.application.domain.model.InternshipApplication;
 import tn.steg.backend.application.infrastructure.persistence.InternshipApplicationRepository;
+import tn.steg.backend.audit.domain.repository.AuditLogRepository;
 import tn.steg.backend.candidate.domain.model.Candidate;
 import tn.steg.backend.candidate.domain.model.University;
 import tn.steg.backend.candidate.infrastructure.persistence.CandidateRepository;
 import tn.steg.backend.candidate.infrastructure.persistence.UniversityRepository;
 import tn.steg.backend.certificate.application.CertificateService;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.internship.application.dto.InternshipAssignmentRequest;
 import tn.steg.backend.finance.application.FinanceService;
 import tn.steg.backend.iam.domain.model.User;
 import tn.steg.backend.iam.domain.model.UserStatus;
 import tn.steg.backend.iam.infrastructure.persistence.UserRepository;
 import tn.steg.backend.iam.infrastructure.security.JwtService;
 import tn.steg.backend.internship.application.InternshipService;
-import tn.steg.backend.internship.application.dto.InternshipAssignmentRequest;
+import tn.steg.backend.internship.application.InternshipLifecycleService;
 import tn.steg.backend.internship.application.dto.InternshipCreateManualRequest;
 import tn.steg.backend.internship.application.dto.InternshipResponse;
+import tn.steg.backend.internship.application.dto.InternshipStatusTransitionRequest;
 import tn.steg.backend.internship.domain.model.Internship;
+import tn.steg.backend.internship.domain.model.InternshipStatus;
 import tn.steg.backend.internship.infrastructure.persistence.InternshipRepository;
 import tn.steg.backend.organization.domain.model.Department;
 import tn.steg.backend.organization.domain.model.Employee;
@@ -89,7 +93,9 @@ class StateMachineRejectionTest {
     @Autowired private InternshipApplicationRepository applicationRepository;
     @Autowired private InternshipRepository internshipRepository;
     @Autowired private InternshipService internshipService;
+    @Autowired private InternshipLifecycleService lifecycleService;
     @Autowired private WorkflowService workflowService;
+    @Autowired private AuditLogRepository auditLogRepository;
     @Autowired private FinanceService financeService;
     @Autowired private CertificateService certificateService;
     @Autowired private JwtService jwtService;
@@ -116,12 +122,12 @@ class StateMachineRejectionTest {
         candidateToken = jwtService.generateAccessToken(candidateUser.getId(), candidateUser.getEmail(), List.of("ROLE_CANDIDATE"));
 
         User hrUser = userRepository.saveAndFlush(new User("hr_e1_" + suffix + "@steg.com", "hash", UserStatus.ACTIVE));
-        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
-        hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
+        hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         User financeUser = userRepository.saveAndFlush(new User("fin_e1_" + suffix + "@steg.com", "hash", UserStatus.ACTIVE));
-        financeToken = jwtService.generateAccessToken(financeUser.getId(), financeUser.getEmail(), List.of("ROLE_FINANCE"));
-        financePrincipal = new UserPrincipal(financeUser.getId(), financeUser.getEmail(), List.of("ROLE_FINANCE"));
+        financeToken = jwtService.generateAccessToken(financeUser.getId(), financeUser.getEmail(), List.of("ROLE_ADMIN"));
+        financePrincipal = new UserPrincipal(financeUser.getId(), financeUser.getEmail(), List.of("ROLE_ADMIN"));
         User supervisorUser = userRepository.saveAndFlush(new User("sup_e1_" + suffix + "@steg.com", "hash", UserStatus.ACTIVE));
         supervisorToken = jwtService.generateAccessToken(supervisorUser.getId(), supervisorUser.getEmail(), List.of("ROLE_SUPERVISOR"));
         supervisorPrincipal = new UserPrincipal(supervisorUser.getId(), supervisorUser.getEmail(), List.of("ROLE_SUPERVISOR"));
@@ -133,6 +139,10 @@ class StateMachineRejectionTest {
         Employee financeEmployee = new Employee("EMP-E1-F-" + suffix, "E1", "Fin", dept);
         financeEmployee.setUser(financeUser);
         employeeRepository.saveAndFlush(financeEmployee);
+        // ADMIN staff hold employee profiles too (required for certificate attribution).
+        Employee hrEmployee = new Employee("EMP-E1-HR-" + suffix, "E1", "Hr", dept);
+        hrEmployee.setUser(hrUser);
+        employeeRepository.saveAndFlush(hrEmployee);
 
         University uni = universityRepository.saveAndFlush(new University("UNI_E1_" + suffix, "E1 Uni"));
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -155,19 +165,34 @@ class StateMachineRejectionTest {
         InternshipResponse created = internshipService.createManual(new InternshipCreateManualRequest(
                 candidate.getId(), LocalDate.of(2026, 1, 1), LocalDate.of(2026, 4, 1),
                 "E1 project", "Ingénieur", false), hrPrincipal);
-        // NB: no assign() here — assignment activates the internship outside the workflow
-        // (documented in the matrix); probes need a genuine PLANNED state.
+        // NB: no assign() here — assignment auto-starts the internship through
+        // the single authority (S6b); probes need a genuine APPROVED state.
         return ((tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository)
                 .findById(created.id()).orElseThrow();
     }
 
-    private void transitionInternship(UUID id, String step, WorkflowActionType type, ApprovalDecision decision) throws Exception {
-        mockMvc.perform(post("/api/internships/" + id + "/workflow/actions")
+    /**
+     * S6b — drives the explicit lifecycle endpoint. The legacy
+     * {@code POST /api/internships/{id}/workflow/actions} engine is deleted;
+     * status moves only through {@code POST .../status-transitions}.
+     */
+    private void transitionInternship(UUID id, InternshipStatus target) throws Exception {
+        mockMvc.perform(post("/api/internships/" + id + "/status-transitions")
                         .header("Authorization", "Bearer " + hrToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
-                                new WorkflowTransitionRequest(step, type, decision, "e1"))))
+                                new InternshipStatusTransitionRequest(target, "e1"))))
                 .andExpect(status().isOk());
+    }
+
+    /** S6b — legacy workflow helper kept by name; delegates to the lifecycle endpoint. */
+    private void transitionInternship(UUID id, String step, WorkflowActionType type, ApprovalDecision decision) throws Exception {
+        InternshipStatus target = switch (step) {
+            case "ACTIVE" -> InternshipStatus.IN_PROGRESS;
+            case "COMPLETED" -> InternshipStatus.REPORT_SUBMITTED;
+            default -> throw new IllegalArgumentException("legacy step removed: " + step);
+        };
+        transitionInternship(id, target);
     }
 
     // ------------------------------------------------------------------
@@ -175,23 +200,25 @@ class StateMachineRejectionTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("A1: submitting twice is refused (DRAFT→SUBMITTED is one-way)")
+    @DisplayName("A1: submitting twice is refused (DRAFT→SUBMITTED is one-way, 409 per §4)")
     void submitTwiceRefused() throws Exception {
         InternshipApplication app = draftApplication();
         mockMvc.perform(post("/api/applications/" + app.getId() + "/submit")
                         .header("Authorization", "Bearer " + candidateToken))
                 .andExpect(status().isOk());
+        // AGENTS.md §4: an invalid transition is a 409 INVALID_STATE_TRANSITION
+        // (was 422 before the matrix alignment).
         mockMvc.perform(post("/api/applications/" + app.getId() + "/submit")
                         .header("Authorization", "Bearer " + candidateToken))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error").value("INVALID_STATUS_TRANSITION"));
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("INVALID_STATE_TRANSITION"));
     }
 
     @Test
     @DisplayName("A2: withdrawing an ACCEPTED application is refused")
     void withdrawAcceptedRefused() throws Exception {
         InternshipApplication app = draftApplication();
-        app.setStatus(ApplicationStatus.ACCEPTED);
+        app.setStatus(ApplicationStatus.APPROVED);
         applicationRepository.saveAndFlush(app);
         mockMvc.perform(post("/api/applications/" + app.getId() + "/withdraw")
                         .header("Authorization", "Bearer " + candidateToken))
@@ -231,7 +258,7 @@ class StateMachineRejectionTest {
     }
 
     @Test
-    @DisplayName("A5: reading another internship's workflow state is refused (404, no oracle)")
+    @DisplayName("A5: reading another internship is refused (404, no oracle)")
     void foreignInternshipWorkflowHidden() throws Exception {
         Internship internship = plannedInternship();
         User outsiderUser = userRepository.saveAndFlush(new User(
@@ -239,7 +266,9 @@ class StateMachineRejectionTest {
                 "hash", UserStatus.ACTIVE));
         String outsiderToken = jwtService.generateAccessToken(outsiderUser.getId(),
                 outsiderUser.getEmail(), List.of("ROLE_CANDIDATE"));
-        mockMvc.perform(get("/api/internships/" + internship.getId() + "/workflow")
+        // S6b: the legacy GET .../workflow state endpoint is deleted; the
+        // row-level read itself must not leak existence.
+        mockMvc.perform(get("/api/internships/" + internship.getId())
                         .header("Authorization", "Bearer " + outsiderToken))
                 .andExpect(status().isNotFound());
     }
@@ -249,39 +278,43 @@ class StateMachineRejectionTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("I1: completing a PLANNED internship directly is refused")
+    @DisplayName("I1: jumping an APPROVED internship straight to UNDER_VALIDATION is refused")
     void completePlannedRefused() throws Exception {
         Internship internship = plannedInternship();
-        mockMvc.perform(post("/api/internships/" + internship.getId() + "/workflow/actions")
+        mockMvc.perform(post("/api/internships/" + internship.getId() + "/status-transitions")
                         .header("Authorization", "Bearer " + hrToken)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(new WorkflowTransitionRequest(
-                                "COMPLETED", WorkflowActionType.COMPLETION, null, "e1"))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error").value("ILLEGAL_WORKFLOW_TRANSITION"));
+                        .content(objectMapper.writeValueAsString(new InternshipStatusTransitionRequest(
+                                InternshipStatus.UNDER_VALIDATION, "e1"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("INVALID_STATE_TRANSITION"));
     }
 
     @Test
-    @DisplayName("I2: reactivating a COMPLETED internship is refused")
+    @DisplayName("I2: restarting a VALIDATED internship is refused")
     void reactivateCompletedRefused() throws Exception {
         Internship internship = plannedInternship();
-        transitionInternship(internship.getId(), "ACTIVE", WorkflowActionType.VALIDATION, null);
-        transitionInternship(internship.getId(), "COMPLETED", WorkflowActionType.COMPLETION, null);
-        mockMvc.perform(post("/api/internships/" + internship.getId() + "/workflow/actions")
+        tn.steg.backend.support.InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository,
+                internship.getId(), hrPrincipal);
+        mockMvc.perform(post("/api/internships/" + internship.getId() + "/status-transitions")
                         .header("Authorization", "Bearer " + hrToken)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(new WorkflowTransitionRequest(
-                                "ACTIVE", WorkflowActionType.VALIDATION, null, "e1"))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.error").value("ILLEGAL_WORKFLOW_TRANSITION"));
+                        .content(objectMapper.writeValueAsString(new InternshipStatusTransitionRequest(
+                                InternshipStatus.IN_PROGRESS, "e1"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("INVALID_STATE_TRANSITION"));
     }
 
     @Test
-    @DisplayName("I3: changing dates of a COMPLETED internship is refused")
+    @DisplayName("I3: changing dates of a VALIDATED internship is refused")
     void datesOfCompletedRefused() throws Exception {
         Internship internship = plannedInternship();
-        transitionInternship(internship.getId(), "ACTIVE", WorkflowActionType.VALIDATION, null);
-        transitionInternship(internship.getId(), "COMPLETED", WorkflowActionType.COMPLETION, null);
+        tn.steg.backend.support.InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository,
+                internship.getId(), hrPrincipal);
         mockMvc.perform(put("/api/internships/" + internship.getId() + "/dates")
                         .header("Authorization", "Bearer " + hrToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -291,18 +324,169 @@ class StateMachineRejectionTest {
     }
 
     // ------------------------------------------------------------------
+    // Administrative validation decisions (COMPLETED internships)
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("V1: walking the §4 chain to VALIDATED through the single authority keeps status VALIDATED")
+    void validationApprovedOnCompleted() throws Exception {
+        Internship internship = plannedInternship();
+        tn.steg.backend.support.InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository,
+                internship.getId(), hrPrincipal);
+        Internship reloaded = ((tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository)
+                .findById(internship.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(InternshipStatus.VALIDATED);
+    }
+
+    @Test
+    @DisplayName("V2: reaching VALIDATED through the generic endpoint is refused (reserved for the S7 decision)")
+    void validationWithoutDecisionRefused() throws Exception {
+        Internship internship = plannedInternship();
+        transitionInternship(internship.getId(), InternshipStatus.IN_PROGRESS);
+        transitionInternship(internship.getId(), InternshipStatus.REPORT_SUBMITTED);
+        transitionInternship(internship.getId(), InternshipStatus.UNDER_VALIDATION);
+        // S6b: UNDER_VALIDATION → VALIDATED is RESERVED — a bare status call
+        // would skip the S7 manual per-document decision.
+        mockMvc.perform(post("/api/internships/" + internship.getId() + "/status-transitions")
+                        .header("Authorization", "Bearer " + hrToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new InternshipStatusTransitionRequest(
+                                InternshipStatus.VALIDATED, "e1"))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error").value("INTERNSHIP_STATUS_RESERVED"));
+    }
+
+    @Test
+    @DisplayName("V3: re-running RECEIPT_ISSUED through the generic endpoint stays refused (reserved)")
+    void recompletionRefused() throws Exception {
+        Internship internship = plannedInternship();
+        tn.steg.backend.support.InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository,
+                internship.getId(), hrPrincipal);
+        mockMvc.perform(post("/api/internships/" + internship.getId() + "/status-transitions")
+                        .header("Authorization", "Bearer " + hrToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new InternshipStatusTransitionRequest(
+                                InternshipStatus.RECEIPT_ISSUED, "e1"))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error").value("INTERNSHIP_STATUS_RESERVED"));
+    }
+
+    @Test
+    @DisplayName("V4: certificates require VALIDATED — earlier states stay blocked, VALIDATED succeeds")
+    void certificateRequiresApprovedValidation() throws Exception {
+        Internship internship = plannedInternship();
+        // ACTIVE assignment so the supervisor endpoint authorizes the caller.
+        internshipService.assign(internship.getId(), new InternshipAssignmentRequest(
+                dept.getId(), supervisorEmployee.getId(),
+                LocalDate.of(2026, 1, 1), LocalDate.of(2026, 4, 1), "e1"), hrPrincipal);
+
+        // Approved-but-not-validated → 409 INTERNSHIP_NOT_VALIDATED (audit
+        // assumption #17: stricter than §5.7 "approved"; S7 decisions produce
+        // VALIDATED so the flow stays reachable).
+        // NB: assign() auto-started the internship, so it is IN_PROGRESS here.
+        mockMvc.perform(post("/api/internships/" + internship.getId() + "/certificates")
+                        .header("Authorization", "Bearer " + hrToken))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("INTERNSHIP_NOT_VALIDATED"));
+
+        // S6b: VALIDATED is reached through the single authority (the S7 manual
+        // decision will own this step; the fixture drives the same service).
+        tn.steg.backend.support.InternshipLifecycleFixture.validate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository,
+                internship.getId(), hrPrincipal);
+        mockMvc.perform(post("/api/internships/" + internship.getId() + "/certificates")
+                        .header("Authorization", "Bearer " + hrToken))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    @DisplayName("V5: the assigned supervisor cannot generate certificates (ADMIN only)")
+    void supervisorCannotGenerateCertificate() throws Exception {
+        Internship internship = plannedInternship();
+        internshipService.assign(internship.getId(), new InternshipAssignmentRequest(
+                dept.getId(), supervisorEmployee.getId(),
+                LocalDate.of(2026, 1, 1), LocalDate.of(2026, 4, 1), "e1"), hrPrincipal);
+        tn.steg.backend.support.InternshipLifecycleFixture.validate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository,
+                internship.getId(), hrPrincipal);
+        // Even fully validated, the assigned supervisor is refused at authorization.
+        mockMvc.perform(post("/api/internships/" + internship.getId() + "/certificates")
+                        .header("Authorization", "Bearer " + supervisorToken))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("V6: a VALIDATED internship keeps its certificate eligibility (no second engine to resume)")
+    void correctionsResubmittedThenApproved() throws Exception {
+        Internship internship = completedInternship();
+        // S6b: the legacy MODIFICATION_REQUESTED/RETURNED validation decisions
+        // lived in the deleted workflow engine (S7 re-introduces per-document
+        // decisions). The single-authority fact is: VALIDATED stays VALIDATED
+        // and the certificate generates exactly once.
+        mockMvc.perform(post("/api/internships/" + internship.getId() + "/certificates")
+                        .header("Authorization", "Bearer " + hrToken))
+                .andExpect(status().isCreated());
+        Internship reloaded = ((tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository)
+                .findById(internship.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(InternshipStatus.VALIDATED);
+    }
+
+    @Test
+    @DisplayName("V7: a VALIDATED internship generates its certificate (single authority, no hold step)")
+    void heldInternshipResumes() throws Exception {
+        Internship internship = completedInternship();
+        mockMvc.perform(post("/api/internships/" + internship.getId() + "/certificates")
+                        .header("Authorization", "Bearer " + hrToken))
+                .andExpect(status().isCreated());
+        Internship reloaded = ((tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository)
+                .findById(internship.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(InternshipStatus.VALIDATED);
+    }
+
+    @Test
+    @DisplayName("V8: every lifecycle step is preserved in the audit history")
+    void validationDecisionsAudited() throws Exception {
+        Internship internship = plannedInternship();
+        tn.steg.backend.support.InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository,
+                internship.getId(), hrPrincipal);
+        // S6b: the legacy INTERNSHIP_VALIDATION_* workflow audit codes are gone
+        // with the engine; the authority audits every step as
+        // INTERNSHIP_STATUS_CHANGED (S7 adds the per-document decision codes).
+        long statusChanges = auditLogRepository
+                .findByEntityTypeAndEntityIdOrderByCreatedAtAsc("Internship", internship.getId()).stream()
+                .filter(a -> "INTERNSHIP_STATUS_CHANGED".equals(a.getAction()))
+                .count();
+        assertThat(statusChanges).isGreaterThanOrEqualTo(4);
+    }
+
+    private Internship completedInternship() {
+        Internship internship = plannedInternship();
+        tn.steg.backend.support.InternshipLifecycleFixture.startAndValidate(
+                lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository,
+                internship.getId(), hrPrincipal);
+        return ((tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository)
+                .findById(internship.getId()).orElseThrow();
+    }
+
+    // ------------------------------------------------------------------
     // Finance machine
     // ------------------------------------------------------------------
 
     private UUID certifiedCompletedInternshipId() {
-        Internship internship = plannedInternship();
-        try {
-            transitionInternship(internship.getId(), "ACTIVE", WorkflowActionType.VALIDATION, null);
-            transitionInternship(internship.getId(), "COMPLETED", WorkflowActionType.COMPLETION, null);
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
-        }
-        certificateService.generateCertificate(internship.getId(), supervisorPrincipal);
+        Internship internship = completedInternship();
+        // S6b: the certificate gate is the VALIDATED status (no workflow
+        // decision table any more). Generate through the service with an
+        // ADMIN principal that owns an employee profile (see setUp).
+        certificateService.generateCertificate(internship.getId(), hrPrincipal);
         return internship.getId();
     }
 

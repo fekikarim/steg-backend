@@ -54,7 +54,7 @@ class AuditControllerSecurityTest {
     private MockMvc mockMvc;
 
     private String adminToken;
-    private String hrToken;
+    private String supervisorToken;
     private String candidateToken;
 
     private UUID adminId;
@@ -69,8 +69,8 @@ class AuditControllerSecurityTest {
         adminId = admin.getId();
         adminToken = jwtService.generateAccessToken(admin.getId(), admin.getEmail(), List.of("ROLE_ADMIN"));
 
-        User hr = userRepository.saveAndFlush(new User("audit_hr@steg.tn", "hash", UserStatus.ACTIVE));
-        hrToken = jwtService.generateAccessToken(hr.getId(), hr.getEmail(), List.of("ROLE_HR"));
+        User supervisor = userRepository.saveAndFlush(new User("audit_sup@steg.tn", "hash", UserStatus.ACTIVE));
+        supervisorToken = jwtService.generateAccessToken(supervisor.getId(), supervisor.getEmail(), List.of("ROLE_SUPERVISOR"));
 
         User candidate = userRepository.saveAndFlush(new User("audit_cand@steg.tn", "hash", UserStatus.ACTIVE));
         candidateToken = jwtService.generateAccessToken(candidate.getId(), candidate.getEmail(), List.of("ROLE_CANDIDATE"));
@@ -88,9 +88,9 @@ class AuditControllerSecurityTest {
     }
 
     @Test
-    @DisplayName("HR and CANDIDATE roles -> 403 (ADMIN only)")
+    @DisplayName("SUPERVISOR and CANDIDATE roles -> 403 (ADMIN only)")
     void nonAdminForbidden() throws Exception {
-        mockMvc.perform(get("/api/audit").header("Authorization", "Bearer " + hrToken))
+        mockMvc.perform(get("/api/audit").header("Authorization", "Bearer " + supervisorToken))
                 .andExpect(status().isForbidden());
         mockMvc.perform(get("/api/audit").header("Authorization", "Bearer " + candidateToken))
                 .andExpect(status().isForbidden());

@@ -26,13 +26,18 @@ import tn.steg.backend.iam.domain.repository.UserRepository;
  * and phone numbers are fictional and marked as such. Idempotent: safe to
  * re-run; existing emails are skipped.
  *
- * <p>Seeds one working account per role (password from
- * {@code STEG_SEED_DEMO_PASSWORD}, default {@code Demo#2026} DEV-ONLY):
- * CANDIDATE, INTERN, SUPERVISOR, HR, FINANCE, DIRECTOR, ADMIN.
+ * <p>Seeds one working account per live role. Seeding is OFF unless
+ * {@code STEG_SEED_DEMO_ENABLED=true} is set explicitly (no implicit
+ * default) and the password MUST come from {@code STEG_SEED_DEMO_PASSWORD} —
+ * there is no built-in default password, so a deployed profile can never be
+ * seeded with a password that exists in this repository (AGENTS.md 0.4/14).
+ * CANDIDATE, INTERN, SUPERVISOR, ADMIN. The legacy hr/finance/director demo
+ * addresses are retained for compatibility but now carry the ADMIN role
+ * (V34 removed HR/FINANCE/DIRECTOR permanently).
  */
 @Component
 @Profile("integration")
-@ConditionalOnProperty(name = "steg.seed.demo-enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = "steg.seed.demo-enabled", havingValue = "true")
 public class IntegrationDemoSeeder implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(IntegrationDemoSeeder.class);
@@ -44,9 +49,9 @@ public class IntegrationDemoSeeder implements ApplicationRunner {
         DEMO_ACCOUNTS.put("candidate.demo@demo.steg.tn", "CANDIDATE");
         DEMO_ACCOUNTS.put("intern.demo@demo.steg.tn", "INTERN");
         DEMO_ACCOUNTS.put("supervisor.demo@demo.steg.tn", "SUPERVISOR");
-        DEMO_ACCOUNTS.put("hr.demo@demo.steg.tn", "HR");
-        DEMO_ACCOUNTS.put("finance.demo@demo.steg.tn", "FINANCE");
-        DEMO_ACCOUNTS.put("director.demo@demo.steg.tn", "DIRECTOR");
+        DEMO_ACCOUNTS.put("hr.demo@demo.steg.tn", "ADMIN");
+        DEMO_ACCOUNTS.put("finance.demo@demo.steg.tn", "ADMIN");
+        DEMO_ACCOUNTS.put("director.demo@demo.steg.tn", "ADMIN");
         DEMO_ACCOUNTS.put("admin.demo@demo.steg.tn", "ADMIN");
     }
 
@@ -59,7 +64,13 @@ public class IntegrationDemoSeeder implements ApplicationRunner {
             UserRepository users,
             RoleRepository roles,
             PasswordEncoder passwordEncoder,
-            @Value("${steg.seed.demo-password:Demo#2026}") String demoPassword) {
+            @Value("${steg.seed.demo-password:}") String demoPassword) {
+        if (demoPassword == null || demoPassword.isBlank()) {
+            throw new IllegalStateException(
+                    "Demo seeding is enabled but STEG_SEED_DEMO_PASSWORD is empty. "
+                            + "Set an explicit password (never a repository default) or set "
+                            + "STEG_SEED_DEMO_ENABLED=false to skip demo seeding.");
+        }
         this.users = users;
         this.roles = roles;
         this.passwordEncoder = passwordEncoder;

@@ -55,6 +55,17 @@ public class User extends BaseEntity {
     @Column(name = "email_notifications_enabled", nullable = false)
     private Boolean emailNotificationsEnabled = true;
 
+    @Column(name = "must_change_password", nullable = false)
+    private Boolean mustChangePassword = false;
+
+    /**
+     * Credential version (V53): access tokens issued BEFORE this instant are
+     * refused by the JWT filter. Bumped by the admin password reset so the
+     * old access token stops working the moment the secret changes.
+     */
+    @Column(name = "credentials_updated_at")
+    private java.time.Instant credentialsUpdatedAt;
+
     @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(
             name = "user_roles",

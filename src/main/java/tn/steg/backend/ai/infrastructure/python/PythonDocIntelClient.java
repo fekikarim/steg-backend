@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
@@ -170,6 +171,112 @@ public class PythonDocIntelClient implements DocIntelClient {
         }
     }
 
+    /**
+     * S7 report verification (§7.1): PDF + database expected values against
+     * {@code POST /api/verification/report}. Strict contract check on the
+     * structured {@code {overall, checks[]}} payload — non-conforming JSON is
+     * rejected (degraded), never rendered raw. Deterministic 4xx (bad token,
+     * oversized/unparsable PDF) propagates as a business error without
+     * tripping the outage circuit; anything transient degrades to empty.
+     */
+        @Override
+    public Optional<DocIntelClient.VerificationResult> verifyReport(
+            byte[] pdf, DocIntelClient.ReportExpected expected) {
+        if (!guard("verifyReport")) {
+            return Optional.empty();
+        }
+        try {
+            String body = objectMapper.writeValueAsString(new ReportVerificationPayload(
+                    Base64.getEncoder().encodeToString(pdf),
+                    expected.candidateName(), expected.supervisorName(), expected.internshipType(),
+                    expected.startDate(), expected.endDate(), expected.universityName()));
+            JsonNode root = post("/api/verification/report", body);
+            DocIntelClient.VerificationResult parsed = parseVerificationResult(root);
+            if (parsed == null) {
+                log.warn("Python report verification rejected: non-conforming response (field-level only)");
+                return Optional.empty();
+            }
+            ok();
+            return Optional.of(parsed);
+        } catch (tn.steg.backend.common.domain.exception.BusinessRuleException bre) {
+            throw bre;
+        } catch (Exception ex) {
+            fail("verifyReport", ex);
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * S7 journal verification (§7.2): PDF + period + the shared
+     * task-completion ratio inputs against {@code POST /api/verification/journal}.
+     * Same strictness and degradation contract as {@link #verifyReport}.
+     */
+        @Override
+    public Optional<DocIntelClient.VerificationResult> verifyJournal(
+            byte[] pdf, DocIntelClient.JournalExpected expected) {
+        if (!guard("verifyJournal")) {
+            return Optional.empty();
+        }
+        try {
+            String body = objectMapper.writeValueAsString(new JournalVerificationPayload(
+                    Base64.getEncoder().encodeToString(pdf),
+                    expected.startDate(), expected.endDate(),
+                    expected.completedApprovedTasks(), expected.totalTasks()));
+            JsonNode root = post("/api/verification/journal", body);
+            DocIntelClient.VerificationResult parsed = parseVerificationResult(root);
+            if (parsed == null) {
+                log.warn("Python journal verification rejected: non-conforming response (field-level only)");
+                return Optional.empty();
+            }
+            ok();
+            return Optional.of(parsed);
+        } catch (tn.steg.backend.common.domain.exception.BusinessRuleException bre) {
+            throw bre;
+        } catch (Exception ex) {
+            fail("verifyJournal", ex);
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Strict §7.3 contract parse: {@code overall} must be PASS/FAIL/INCONCLUSIVE
+     * and {@code checks} a list of {@code {key,label,status,expected,found,
+     * evidence}} with PASSED/FAILED/INCONCLUSIVE statuses. Returns null on any
+     * deviation (degrade, never trust).
+     */
+    static DocIntelClient.VerificationResult parseVerificationResult(JsonNode root) {
+        if (root == null || !root.isObject()) {
+            return null;
+        }
+        String overall = root.path("overall").asText("");
+        if (!overall.equals("PASS") && !overall.equals("FAIL") && !overall.equals("INCONCLUSIVE")) {
+            return null;
+        }
+        JsonNode checks = root.path("checks");
+        if (!checks.isArray()) {
+            return null;
+        }
+        java.util.List<DocIntelClient.VerificationCheck> parsed = new java.util.ArrayList<>();
+        for (JsonNode c : checks) {
+            if (!c.isObject()) {
+                return null;
+            }
+            String status = c.path("status").asText("");
+            if (!status.equals("PASSED") && !status.equals("FAILED") && !status.equals("INCONCLUSIVE")) {
+                return null;
+            }
+            String key = c.path("key").asText("");
+            String label = c.path("label").asText("");
+            if (key.isBlank() || label.isBlank()) {
+                return null;
+            }
+            parsed.add(new DocIntelClient.VerificationCheck(key, label, status,
+                    c.path("expected").asText(""), c.path("found").asText(""),
+                    c.path("evidence").asText("")));
+        }
+        return new DocIntelClient.VerificationResult(overall, List.copyOf(parsed));
+    }
+
     private boolean guard(String op) {
         if (!isConfigured()) {
             log.debug("Python AI service not configured; degrading {} (no call)", op);
@@ -282,4 +389,10 @@ public class PythonDocIntelClient implements DocIntelClient {
 
     private record FinancePayload(String certificatePdfBase64, String reportPdfBase64, String internFullName,
             String period, String internshipType, String version) {}
+
+    private record ReportVerificationPayload(String pdfBase64, String candidateName, String supervisorName,
+            String internshipType, String startDate, String endDate, String universityName) {}
+
+    private record JournalVerificationPayload(String pdfBase64, String startDate, String endDate,
+            int completedApprovedTasks, int totalTasks) {}
 }

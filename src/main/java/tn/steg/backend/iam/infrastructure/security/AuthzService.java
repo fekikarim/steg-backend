@@ -21,6 +21,7 @@ import tn.steg.backend.internship.domain.model.Internship;
 import tn.steg.backend.internship.domain.model.InternshipAssignment;
 import tn.steg.backend.internship.domain.repository.InternshipAssignmentRepository;
 import tn.steg.backend.internship.domain.repository.InternshipRepository;
+import tn.steg.backend.internship.application.SupervisionScopeService;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -53,6 +54,7 @@ public class AuthzService {
     private final DeliverableRepository deliverableRepository;
     private final EvaluationDomainRepository evaluationRepository;
     private final ConversationMemberRepository conversationMemberRepository;
+    private final SupervisionScopeService supervisionScopeService;
 
     public boolean isAuthenticated() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -163,29 +165,18 @@ public class AuthzService {
     public boolean isSupervisorOf(UUID id) {
         UserPrincipal actor = getCurrentUser();
         if (actor == null) return false;
-        if (actor.hasRole("ADMIN") || actor.hasRole("HR")) return true;
+        if (actor.hasRole("ADMIN")) return true;
 
         UUID internshipId = resolveInternshipId(id);
         if (internshipId == null) return false;
-
-        Optional<InternshipAssignment> activeAssignment = assignmentRepository
-                .findByInternshipIdAndStatus(internshipId, AssignmentStatus.ACTIVE);
-
-        if (activeAssignment.isEmpty()) return false;
-
-        InternshipAssignment assignment = activeAssignment.get();
-        if (assignment.getSupervisor() == null || assignment.getSupervisor().getUser() == null) {
-            return false;
-        }
-
-        return assignment.getSupervisor().getUser().getId().equals(actor.getId());
+        return supervisionScopeService.isAssignedTo(actor, internshipId);
     }
 
     @Transactional(readOnly = true)
     public boolean isInternOf(UUID id) {
         UserPrincipal actor = getCurrentUser();
         if (actor == null) return false;
-        if (actor.hasRole("ADMIN") || actor.hasRole("HR")) return true;
+        if (actor.hasRole("ADMIN")) return true;
 
         UUID internshipId = resolveInternshipId(id);
         if (internshipId == null) return false;

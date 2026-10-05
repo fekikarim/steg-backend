@@ -40,13 +40,17 @@ class PublicEndpointConsistencyTest {
     }
 
     @Test
-    @DisplayName("register, login and refresh are reachable anonymously (400, not 401)")
+    @DisplayName("register, login, back-office login and refresh are reachable anonymously (400, not 401)")
     void authPublicEndpointsReachableAnonymously() throws Exception {
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest());
         mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/auth/back-office-login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest());
@@ -60,6 +64,25 @@ class PublicEndpointConsistencyTest {
     @DisplayName("public reference data is reachable anonymously")
     void universitiesReachableAnonymously() throws Exception {
         mockMvc.perform(get("/api/universities")).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("every @PublicEndpoint path answers anonymously (triple-list agreement: annotation + SecurityConfig + JWT filter)")
+    void everyPublicEndpointAnswersAnonymously() throws Exception {
+        // Anonymous application intake + identifier pre-check (multipart or
+        // JSON accepted; empty bodies fail validation = 400, never 401/403).
+        mockMvc.perform(post("/api/public/applications/validate-identifiers")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+        // Public document validation with an empty file part = 400 from the
+        // controller (never 401/403: the anonymous surface agrees).
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart("/api/public/documents/validation")
+                        .file(new org.springframework.mock.web.MockMultipartFile(
+                                "file", "empty.pdf", "application/pdf", new byte[0]))
+                        .param("type", "STAGE"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

@@ -31,10 +31,13 @@ public record InternshipAssignmentResponse(
         String deptName = assignment.getDestination() != null ? assignment.getDestination().getName() : null;
         UUID deptId = assignment.getDestination() != null ? assignment.getDestination().getId() : null;
 
+        UUID userSupervisorId = assignment.getSupervisorUser() != null ? assignment.getSupervisorUser().getId() : null;
         String supName = assignment.getSupervisor() != null
                 ? assignment.getSupervisor().getFirstName() + " " + assignment.getSupervisor().getLastName()
-                : null;
-        UUID supId = assignment.getSupervisor() != null ? assignment.getSupervisor().getId() : null;
+                : assignment.getSupervisorUser() != null ? assignment.getSupervisorUser().getEmail() : null;
+        UUID supId = userSupervisorId != null
+                ? userSupervisorId
+                : assignment.getSupervisor() != null ? assignment.getSupervisor().getId() : null;
 
         String assignerName = assignment.getAssignedBy() != null
                 ? assignment.getAssignedBy().getFirstName() + " " + assignment.getAssignedBy().getLastName()

@@ -15,6 +15,7 @@ import lombok.Setter;
 import tn.steg.backend.application.domain.model.InternshipApplication;
 import tn.steg.backend.candidate.domain.model.Candidate;
 import tn.steg.backend.common.domain.model.BaseEntity;
+import tn.steg.backend.iam.domain.model.User;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -37,7 +38,7 @@ public class Internship extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 50)
-    private InternshipStatus status = InternshipStatus.PLANNED;
+    private InternshipStatus status = InternshipStatus.APPROVED;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "type", nullable = false, length = 50)
@@ -72,6 +73,10 @@ public class Internship extends BaseEntity {
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "application_id", unique = true)
     private InternshipApplication application;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "supervisor_user_id")
+    private User supervisorUser;
 
     public Internship(String reference, Candidate candidate, LocalDate startDate, LocalDate endDate,
                       InternshipType type, InternshipRequirement requirement) {

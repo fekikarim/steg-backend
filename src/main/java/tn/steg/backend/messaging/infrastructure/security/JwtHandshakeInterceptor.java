@@ -45,6 +45,7 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
     public static final String PRINCIPAL_ATTR = "STEG_WS_PRINCIPAL";
 
     private final JwtService jwtService;
+    private final tn.steg.backend.iam.domain.repository.UserRepository userRepository;
 
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
@@ -62,6 +63,15 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
             String email = claims.get("email", String.class);
             @SuppressWarnings("unchecked")
             List<String> roles = claims.get("roles", List.class);
+            // Session revocation (Task 3): a deactivated or deleted account
+            // cannot open a new socket with a still-valid token either.
+            var account = userRepository.findById(userId).orElse(null);
+            if (account == null || !Boolean.TRUE.equals(account.getEnabled())
+                    || account.getStatus() != tn.steg.backend.iam.domain.model.UserStatus.ACTIVE) {
+                log.debug("WS handshake rejected: account no longer active (path={})", sanitizePath(request));
+                response.setStatusCode(HttpStatus.UNAUTHORIZED);
+                return false;
+            }
             UserPrincipal principal = new UserPrincipal(userId, email, roles != null ? roles : List.of());
             attributes.put(PRINCIPAL_ATTR, principal);
             return true;

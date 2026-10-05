@@ -124,6 +124,7 @@ class AiControllerSecurityTest {
     private String internToken;
     private String outsiderToken;
     private String supervisorToken;
+    private UUID hrUserId;
 
     private Candidate internCandidate;
     private Candidate outsiderCandidate;
@@ -139,10 +140,11 @@ class AiControllerSecurityTest {
                 .build();
 
         User hrUser = userRepository.saveAndFlush(new User("aisec_hr@steg.tn", "hash", UserStatus.ACTIVE));
-        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        hrUserId = hrUser.getId();
+        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         User financeUser = userRepository.saveAndFlush(new User("aisec_fin@steg.tn", "hash", UserStatus.ACTIVE));
-        financeToken = jwtService.generateAccessToken(financeUser.getId(), financeUser.getEmail(), List.of("ROLE_FINANCE"));
+        financeToken = jwtService.generateAccessToken(financeUser.getId(), financeUser.getEmail(), List.of("ROLE_ADMIN"));
 
         User adminUser = userRepository.saveAndFlush(new User("aisec_admin@steg.tn", "hash", UserStatus.ACTIVE));
         adminToken = jwtService.generateAccessToken(adminUser.getId(), adminUser.getEmail(), List.of("ROLE_ADMIN"));
@@ -185,7 +187,7 @@ class AiControllerSecurityTest {
         internship = new Internship("INT-AISEC-1", internCandidate,
                 LocalDate.of(2026, 1, 1), LocalDate.of(2026, 4, 1),
                 InternshipType.PFE, InternshipRequirement.OBLIGATOIRE);
-        internship.setStatus(InternshipStatus.ACTIVE);
+        internship.setStatus(InternshipStatus.IN_PROGRESS);
         internship = internshipRepository.saveAndFlush(internship);
 
         InternshipAssignment assignment = new InternshipAssignment(internship, dept, supervisorEmployee, hrEmployee,
@@ -217,18 +219,18 @@ class AiControllerSecurityTest {
     }
 
     @Test
-    @DisplayName("application analyze: CANDIDATE and FINANCE roles -> 403")
+    @DisplayName("application analyze: CANDIDATE and SUPERVISOR roles -> 403 (ADMIN only)")
     void applicationAnalyzeWrongRole() throws Exception {
         mockMvc.perform(post("/api/ai/applications/{id}/analyze", application.getId())
                         .header("Authorization", "Bearer " + internToken))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/api/ai/applications/{id}/analyze", application.getId())
-                        .header("Authorization", "Bearer " + financeToken))
+                        .header("Authorization", "Bearer " + supervisorToken))
                 .andExpect(status().isForbidden());
     }
 
     @Test
-    @DisplayName("application analyze: HR and ADMIN reach the endpoint (degraded 200, CIN excluded)")
+    @DisplayName("application analyze: ADMIN reaches the endpoint (degraded 200, CIN excluded)")
     void applicationAnalyzeAuthorized() throws Exception {
         mockMvc.perform(post("/api/ai/applications/{id}/analyze", application.getId())
                         .header("Authorization", "Bearer " + hrToken))
@@ -252,10 +254,10 @@ class AiControllerSecurityTest {
     }
 
     @Test
-    @DisplayName("finance-case analyze: HR and CANDIDATE roles -> 403 (FINANCE-only)")
+    @DisplayName("finance-case analyze: SUPERVISOR and CANDIDATE roles -> 403 (ADMIN only)")
     void financeAnalyzeWrongRole() throws Exception {
         mockMvc.perform(post("/api/ai/finance-cases/{id}/analyze", financeCase.getId())
-                        .header("Authorization", "Bearer " + hrToken))
+                        .header("Authorization", "Bearer " + supervisorToken))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/api/ai/finance-cases/{id}/analyze", financeCase.getId())
                         .header("Authorization", "Bearer " + internToken))
@@ -273,7 +275,7 @@ class AiControllerSecurityTest {
     }
 
     // ------------------------------------------------------------------
-    // POST /api/ai/internships/{id}/logbook/generate — ADMIN, HR, participant
+    // POST /api/ai/internships/{id}/logbook/generate — ADMIN, participant
     // ------------------------------------------------------------------
 
     @Test
@@ -292,7 +294,7 @@ class AiControllerSecurityTest {
     }
 
     @Test
-    @DisplayName("logbook generate: intern, supervisor, and HR can reach the endpoint")
+    @DisplayName("logbook generate: intern, supervisor, and ADMIN can reach the endpoint")
     void logbookParticipantsAuthorized() throws Exception {
         mockMvc.perform(post("/api/ai/internships/{id}/logbook/generate", internship.getId())
                         .header("Authorization", "Bearer " + internToken))
@@ -320,13 +322,29 @@ class AiControllerSecurityTest {
     }
 
     @Test
-    @DisplayName("assistant query: HR role -> 403")
-    void assistantWrongRole() throws Exception {
+    @DisplayName("assistant query: ADMIN role gets staff aggregates (200, staff context)")
+    void assistantStaffRoles() throws Exception {
         mockMvc.perform(post("/api/ai/assistant/query")
                         .header("Authorization", "Bearer " + hrToken)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"question\":\"Bonjour\"}"))
-                .andExpect(status().isForbidden());
+                        .content(objectMapper.writeValueAsString(java.util.Map.of("question", "Combien de candidatures en attente ?"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.analysis.relatedEntityId").value(hrUserId.toString()));
+        mockMvc.perform(post("/api/ai/assistant/query")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(java.util.Map.of("question", "Quels stages attendent validation ?"))))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("assistant query: supervisor sees assigned scope; outsider candidate unaffected")
+    void assistantSupervisorScope() throws Exception {
+        mockMvc.perform(post("/api/ai/assistant/query")
+                        .header("Authorization", "Bearer " + supervisorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(java.util.Map.of("question", "Résume mes stagiaires"))))
+                .andExpect(status().isOk());
     }
 
     @Test
@@ -359,7 +377,7 @@ class AiControllerSecurityTest {
     }
 
     // ------------------------------------------------------------------
-    // POST /api/ai/recommendations/{id}/review — ADMIN, HR, FINANCE, SUPERVISOR + Employee
+    // POST /api/ai/recommendations/{id}/review — ADMIN, SUPERVISOR + Employee
     // ------------------------------------------------------------------
 
     @Test
@@ -392,7 +410,7 @@ class AiControllerSecurityTest {
     }
 
     @Test
-    @DisplayName("recommendation review: HR with Employee profile accepts the recommendation")
+    @DisplayName("recommendation review: ADMIN with Employee profile accepts the recommendation")
     void reviewHappyPath() throws Exception {
         mockMvc.perform(post("/api/ai/recommendations/{id}/review", recommendation.getId())
                         .header("Authorization", "Bearer " + hrToken)

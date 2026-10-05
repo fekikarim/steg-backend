@@ -92,7 +92,7 @@ class LogbookServiceTest {
                 LocalDate.of(2026, 6, 1), LocalDate.of(2026, 7, 1),
                 InternshipType.OBSERVATION, InternshipRequirement.OBLIGATOIRE);
         internship.setId(INTERNSHIP_ID);
-        internship.setStatus(InternshipStatus.COMPLETED);
+        internship.setStatus(InternshipStatus.VALIDATED);
 
         User supUser = new User("sup@steg.tn", "hash", UserStatus.ACTIVE);
         supUser.setId(SUPERVISOR_USER_ID);
@@ -149,7 +149,7 @@ class LogbookServiceTest {
         @Test
         @DisplayName("Only completed internships accept a logbook")
         void nonCompletedRejected() {
-            internship.setStatus(InternshipStatus.ACTIVE);
+            internship.setStatus(InternshipStatus.IN_PROGRESS);
             assertThatThrownBy(() -> service.submitForValidation(INTERNSHIP_ID, "text", internPrincipal))
                     .isInstanceOf(BusinessRuleException.class)
                     .hasMessageContaining("completed");
@@ -280,7 +280,7 @@ class LogbookServiceTest {
         @Test
         @DisplayName("HR promotes a VALIDATED logbook to OFFICIAL")
         void hrPromotes() {
-            UserPrincipal hr = new UserPrincipal(UUID.randomUUID(), "hr@steg.tn", List.of("ROLE_HR"));
+            UserPrincipal hr = new UserPrincipal(UUID.randomUUID(), "hr@steg.tn", List.of("ROLE_ADMIN"));
             when(logbookRepository.findById(LOGBOOK_ID)).thenReturn(Optional.of(validated()));
             when(logbookRepository.save(any(Logbook.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -299,14 +299,14 @@ class LogbookServiceTest {
 
             assertThatThrownBy(() -> service.promoteToOfficial(LOGBOOK_ID, supervisorPrincipal))
                     .isInstanceOf(BusinessRuleException.class)
-                    .hasMessageContaining("HR/ADMIN");
+                    .hasMessageContaining("ADMIN");
             verify(logbookRepository, never()).save(any());
         }
 
         @Test
         @DisplayName("Only VALIDATED logbooks can be made official")
         void onlyValidatedCanPromote() {
-            UserPrincipal hr = new UserPrincipal(UUID.randomUUID(), "hr@steg.tn", List.of("ROLE_HR"));
+            UserPrincipal hr = new UserPrincipal(UUID.randomUUID(), "hr@steg.tn", List.of("ROLE_ADMIN"));
             Logbook submitted = new Logbook(null, internship, null, null);
             submitted.setId(LOGBOOK_ID);
             submitted.setStatus(LogbookStatus.SUBMITTED);

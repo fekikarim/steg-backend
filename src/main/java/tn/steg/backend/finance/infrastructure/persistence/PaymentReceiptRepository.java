@@ -12,8 +12,8 @@ public interface PaymentReceiptRepository extends JpaRepository<PaymentReceipt, 
         tn.steg.backend.finance.domain.repository.PaymentReceiptRepository {
     Optional<PaymentReceipt> findByReference(String reference);
     Optional<PaymentReceipt> findByFinanceCaseId(UUID financeCaseId);
-    boolean existsByReference(String reference);
 
-    @org.springframework.data.jpa.repository.Query("SELECT COUNT(r) FROM PaymentReceipt r WHERE r.reference LIKE :prefix%")
-    long countByReferencePrefix(@org.springframework.data.repository.query.Param("prefix") String prefix);
+    @org.springframework.data.jpa.repository.Query(
+            value = "SELECT nextval('payment_receipt_reference_seq')", nativeQuery = true)
+    long nextReferenceSequence();
 }

@@ -25,6 +25,7 @@ public record InternshipResponse(
         UUID candidateId,
         String candidateFullName,
         UUID applicationId,
+        UUID supervisorUserId,
         Instant createdAt,
         Instant updatedAt,
         Long version
@@ -35,6 +36,7 @@ public record InternshipResponse(
                 : null;
         UUID candId = internship.getCandidate() != null ? internship.getCandidate().getId() : null;
         UUID appId = internship.getApplication() != null ? internship.getApplication().getId() : null;
+        UUID supId = internship.getSupervisorUser() != null ? internship.getSupervisorUser().getId() : null;
         boolean paymentEligible = internship.getRequirement() == InternshipRequirement.OBLIGATOIRE;
 
         return new InternshipResponse(
@@ -51,6 +53,7 @@ public record InternshipResponse(
                 candId,
                 candidateName,
                 appId,
+                supId,
                 internship.getCreatedAt(),
                 internship.getUpdatedAt(),
                 internship.getVersion()

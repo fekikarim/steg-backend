@@ -1,11 +1,16 @@
 package tn.steg.backend.application.infrastructure.persistence;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import tn.steg.backend.application.domain.model.ApplicationStatus;
 import tn.steg.backend.application.domain.model.InternshipApplication;
+import tn.steg.backend.internship.domain.model.InternshipType;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -47,4 +52,43 @@ public interface InternshipApplicationRepository extends JpaRepository<Internshi
     @Query("SELECT COUNT(a) FROM InternshipApplication a " +
            "WHERE a.reference LIKE :prefix%")
     long countByReferencePrefix(@Param("prefix") String prefix);
+
+    /**
+     * Server-side staff queue (AGENTS.md §5.2): pagination, search, filters and
+     * sort happen in the database. Candidate and university are fetched in the
+     * page query itself, so rendering a row never triggers extra selects.
+     */
+    @Query(value = "SELECT a FROM InternshipApplication a "
+            + "LEFT JOIN FETCH a.candidate c "
+            + "LEFT JOIN FETCH c.university "
+            + "WHERE (:scoped = false OR c.id IN :candidateIds) "
+            + "AND (:status IS NULL OR a.status = :status) "
+            + "AND (:type IS NULL OR a.calculatedType = :type) "
+            + "AND (:universityName IS NULL OR LOWER(c.university.name) = :universityName) "
+            + "AND (CAST(:submissionFrom AS date) IS NULL OR a.submissionDate >= :submissionFrom) "
+            + "AND (CAST(:submissionTo AS date) IS NULL OR a.submissionDate <= :submissionTo) "
+            + "AND (:searchPattern IS NULL OR LOWER(a.reference) LIKE :searchPattern "
+            + "     OR LOWER(CONCAT(c.firstName, ' ', c.lastName)) LIKE :searchPattern "
+            + "     OR LOWER(c.email) LIKE :searchPattern)",
+           countQuery = "SELECT COUNT(a) FROM InternshipApplication a "
+            + "LEFT JOIN a.candidate c "
+            + "WHERE (:scoped = false OR c.id IN :candidateIds) "
+            + "AND (:status IS NULL OR a.status = :status) "
+            + "AND (:type IS NULL OR a.calculatedType = :type) "
+            + "AND (:universityName IS NULL OR LOWER(c.university.name) = :universityName) "
+            + "AND (CAST(:submissionFrom AS date) IS NULL OR a.submissionDate >= :submissionFrom) "
+            + "AND (CAST(:submissionTo AS date) IS NULL OR a.submissionDate <= :submissionTo) "
+            + "AND (:searchPattern IS NULL OR LOWER(a.reference) LIKE :searchPattern "
+            + "     OR LOWER(CONCAT(c.firstName, ' ', c.lastName)) LIKE :searchPattern "
+            + "     OR LOWER(c.email) LIKE :searchPattern)")
+    Page<InternshipApplication> searchStaffApplications(
+            @Param("scoped") boolean scoped,
+            @Param("candidateIds") List<UUID> candidateIds,
+            @Param("status") ApplicationStatus status,
+            @Param("type") InternshipType type,
+            @Param("universityName") String universityName,
+            @Param("submissionFrom") LocalDate submissionFrom,
+            @Param("submissionTo") LocalDate submissionTo,
+            @Param("searchPattern") String searchPattern,
+            Pageable pageable);
 }

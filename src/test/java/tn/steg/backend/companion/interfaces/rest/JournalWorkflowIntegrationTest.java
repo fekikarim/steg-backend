@@ -115,8 +115,8 @@ class JournalWorkflowIntegrationTest {
 
         // Create and assign internship via service (gives it ACTIVE state with supervisor link)
         User hrUser = userRepository.saveAndFlush(new User("journal_hr_" + suffix + "@test.tn", "hash", UserStatus.ACTIVE));
-        var hrPrincipal = new tn.steg.backend.common.domain.model.UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
-        String hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        var hrPrincipal = new tn.steg.backend.common.domain.model.UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
+        String hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         InternshipResponse internship = internshipService.createManual(new InternshipCreateManualRequest(
                 candidate.getId(),

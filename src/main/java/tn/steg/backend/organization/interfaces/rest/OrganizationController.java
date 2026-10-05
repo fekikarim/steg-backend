@@ -27,7 +27,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
-@Tag(name = "Organization", description = "Department and employee management — ADMIN / HR only")
+@Tag(name = "Organization", description = "Department and employee management — ADMIN only")
 public class OrganizationController {
 
     private final OrganizationService organizationService;
@@ -36,14 +36,14 @@ public class OrganizationController {
     // Departments
     // -------------------------------------------------------------------------
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @GetMapping("/departments")
     @Operation(summary = "List all departments")
     public ResponseEntity<List<DepartmentResponse>> listDepartments() {
         return ResponseEntity.ok(organizationService.listDepartments());
     }
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @GetMapping("/departments/{id}")
     @Operation(summary = "Get a department by ID")
     public ResponseEntity<DepartmentResponse> getDepartment(@PathVariable UUID id) {
@@ -78,28 +78,28 @@ public class OrganizationController {
     // Employees
     // -------------------------------------------------------------------------
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @GetMapping("/employees")
     @Operation(summary = "List all employees")
     public ResponseEntity<List<EmployeeResponse>> listEmployees() {
         return ResponseEntity.ok(organizationService.listEmployees());
     }
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @GetMapping("/employees/{id}")
     @Operation(summary = "Get an employee by ID")
     public ResponseEntity<EmployeeResponse> getEmployee(@PathVariable UUID id) {
         return ResponseEntity.ok(organizationService.getEmployee(id));
     }
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @PostMapping("/employees")
     @Operation(summary = "Create a new employee")
     public ResponseEntity<EmployeeResponse> createEmployee(@Valid @RequestBody EmployeeRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(organizationService.createEmployee(request));
     }
 
-    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'HR')")
+    @PreAuthorize("@authz.hasRole('ADMIN')")
     @PutMapping("/employees/{id}")
     @Operation(summary = "Update an employee")
     public ResponseEntity<EmployeeResponse> updateEmployee(

@@ -8,6 +8,7 @@ import tn.steg.backend.ai.application.dto.*;
 import tn.steg.backend.ai.domain.assembler.ApplicationDocumentContentAssembler;
 import tn.steg.backend.ai.domain.assembler.AssembledAiContent;
 import tn.steg.backend.ai.domain.assembler.CandidateAssistantContentAssembler;
+import tn.steg.backend.ai.domain.assembler.StaffAssistantContentAssembler;
 import tn.steg.backend.ai.domain.assembler.FinanceCaseContentAssembler;
 import tn.steg.backend.ai.domain.assembler.InternAssistantContentAssembler;
 import tn.steg.backend.ai.domain.assembler.LogbookContentAssembler;
@@ -69,6 +70,7 @@ public class AiService {
     private final LogbookContentAssembler logbookAssembler;
     private final CandidateAssistantContentAssembler candidateAssistantAssembler;
     private final InternAssistantContentAssembler internAssistantAssembler;
+    private final StaffAssistantContentAssembler staffAssistantAssembler;
     private final StegKnowledgeBase knowledgeBase;
     private final LogbookFidelityGate fidelityChecker;
     private final InternshipJournalRepository journalRepository;
@@ -321,9 +323,12 @@ public class AiService {
 
     @Transactional
     public AiAnalysisResultResponse queryCandidateAssistant(CandidateAssistantQueryRequest request, UserPrincipal actor) {
-        // E2: role-scoped branching. CANDIDATE role → candidate context (profile if
-        // completed, generic KB context while onboarding); other roles → internship context.
-        // Same endpoint, same contract.
+        // Role-scoped branching on one contract: CANDIDATE → own profile context;
+        // ADMIN → staff aggregates (global, read-only tools);
+        // INTERN/SUPERVISOR → assigned-internship context.
+        if (actor.hasRole("ADMIN")) {
+            return queryStaffAssistant(request, actor);
+        }
         if (!actor.hasRole("CANDIDATE")) {
             return queryInternAssistant(request, actor);
         }
@@ -366,6 +371,67 @@ public class AiService {
 
         // E1.5: every AI invocation is audited (field-level summary only, never content).
         auditService.log("AI_ASSISTANT_QUERIED", "Candidate", candidate.getId(), null,
+                Map.of("analysisId", analysis.getId().toString(), "input", assembled.inputSummary()),
+                actor.getId(), null, AuditService.primaryRole(actor.getRoles()), null);
+
+        return new AiAnalysisResultResponse(
+                AiAnalysisResponse.from(analysis),
+                Collections.emptyList(),
+                result.content()
+        );
+    }
+
+    /**
+     * Staff administrative assistant (ADMIN): same contract
+     * as the candidate endpoint, assembled from role-scoped platform aggregates
+     * plus the knowledge base. Advisory only; Gemini errors degrade gracefully.
+     */
+    @Transactional
+    public AiAnalysisResultResponse queryStaffAssistant(CandidateAssistantQueryRequest request, UserPrincipal actor) {
+        AssembledAiContent assembled = staffAssistantAssembler.assemble(actor, request.question());
+
+        User requestedBy = userRepository.findById(actor.getId()).orElse(null);
+        AiAnalysis analysis = new AiAnalysis(
+                AiAnalysisType.STAFF_ASSISTANT_QUERY,
+                "User",
+                actor.getId(),
+                aiCompletionClient.getModel()
+        );
+        analysis.setCinExcluded(true);
+        analysis.setInputSummary(assembled.inputSummary());
+        analysis.setRequestedBy(requestedBy);
+        analysis = aiAnalysisRepository.save(analysis);
+
+        AiCompletionResult result = aiCompletionClient.complete(assembled.systemInstruction(), assembled.promptParts());
+
+        if (!result.success()) {
+            analysis.setOutputSummary("AI_UNAVAILABLE: " + result.errorMessage());
+            aiAnalysisRepository.save(analysis);
+            // Graceful degradation: the staff assistant answers from the
+            // assembled backend aggregates (rule-based) instead of erroring,
+            // so administrators always get real, verifiable figures.
+            String fallback = assembled.deterministicFallback();
+            if (fallback != null && !fallback.isBlank()) {
+                auditService.log("AI_ASSISTANT_QUERIED", "User", actor.getId(), null,
+                        Map.of("analysisId", analysis.getId().toString(), "input", assembled.inputSummary(),
+                                "mode", "rule-based-fallback"),
+                        actor.getId(), null, AuditService.primaryRole(actor.getRoles()), null);
+                return new AiAnalysisResultResponse(
+                        AiAnalysisResponse.from(analysis),
+                        Collections.emptyList(),
+                        fallback);
+            }
+            return new AiAnalysisResultResponse(
+                    AiAnalysisResponse.from(analysis),
+                    Collections.emptyList(),
+                    "Service d'assistance temporairement indisponible: " + result.errorMessage()
+            );
+        }
+
+        analysis.setOutputSummary(result.content());
+        aiAnalysisRepository.save(analysis);
+
+        auditService.log("AI_ASSISTANT_QUERIED", "User", actor.getId(), null,
                 Map.of("analysisId", analysis.getId().toString(), "input", assembled.inputSummary()),
                 actor.getId(), null, AuditService.primaryRole(actor.getRoles()), null);
 

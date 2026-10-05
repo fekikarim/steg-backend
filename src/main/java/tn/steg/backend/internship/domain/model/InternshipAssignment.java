@@ -12,6 +12,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import tn.steg.backend.common.domain.model.BaseEntity;
+import tn.steg.backend.iam.domain.model.User;
 import tn.steg.backend.organization.domain.model.Department;
 import tn.steg.backend.organization.domain.model.Employee;
 
@@ -33,13 +34,21 @@ public class InternshipAssignment extends BaseEntity {
     @JoinColumn(name = "department_id", nullable = false)
     private Department destination;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "supervisor_id", nullable = false)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "supervisor_id")
     private Employee supervisor;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "assigned_by_id", nullable = false)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "assigned_by_id")
     private Employee assignedBy;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "supervisor_user_id")
+    private User supervisorUser;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "assigned_by_user_id")
+    private User assignedByUser;
 
     @Column(name = "assigned_at", nullable = false)
     private LocalDate assignedAt;

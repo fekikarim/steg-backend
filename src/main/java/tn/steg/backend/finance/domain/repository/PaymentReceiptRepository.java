@@ -17,6 +17,6 @@ public interface PaymentReceiptRepository {
      */
     List<PaymentReceipt> findByFinanceCaseIdIn(Collection<UUID> financeCaseIds);
     PaymentReceipt save(PaymentReceipt receipt);
-    boolean existsByReference(String reference);
-    long countByReferencePrefix(String prefix);
+    /** Atomic reference counter (sequence-backed, race-free — see V51). */
+    long nextReferenceSequence();
 }

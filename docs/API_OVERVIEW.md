@@ -20,8 +20,10 @@ Base URL (local/demo): `http://localhost:8080`. All JSON uses UTF-8.
 - **Deny-by-default:** every endpoint carries an explicit authorization rule
   (ArchUnit-enforced in CI). Only four operations are public: `register`, `login`,
   `refresh`, and `GET /api/universities` (registration reference data).
-- **Roles:** `CANDIDATE`, `INTERN`, `SUPERVISOR`, `HR`, `FINANCE`, `DIRECTOR`,
-  `ADMIN`, plus the fine-grained permission `DOCUMENT_VIEW_RESTRICTED`.
+- **Roles:** `CANDIDATE`, `INTERN`, `SUPERVISOR`, `ADMIN`,
+  plus the fine-grained permission `DOCUMENT_VIEW_RESTRICTED`.
+  (V34 removed `HR`/`FINANCE`/`DIRECTOR` permanently; stale JWTs carrying them
+  are rejected on every staff endpoint. Back Office admits ADMIN + SUPERVISOR.)
 - **Ownership rules clients must mirror (backend re-enforces everything):**
   - Candidates see only their own profile/applications/internship/evaluations;
     interns see only internships they participate in; supervisors only internships
@@ -29,9 +31,11 @@ Base URL (local/demo): `http://localhost:8080`. All JSON uses UTF-8.
   - Restricted (CIN-bearing) documents download only with
     `DOCUMENT_VIEW_RESTRICTED` or `ADMIN`, from an allowed IP, and every access
     is audit-logged before bytes stream.
-  - Finance approve/reject: `FINANCE` role only. Certificates: active supervisor
-    of a COMPLETED internship (or ADMIN/HR); download additionally open to the
-    owning intern. Audit viewer: `ADMIN` only. Metrics/prometheus: `ADMIN` only.
+  - Finance approve/reject: `ADMIN`, or the actively assigned `SUPERVISOR`
+    (scoped per case); receipts only for eligible obligatory internships.
+    Certificates: `ADMIN` only, after an APPROVED validation of a COMPLETED
+    internship; download additionally open to the owning intern. Audit viewer:
+    `ADMIN` only. Metrics/prometheus: `ADMIN` only.
 - **Standard error envelope** on every failure:
   `{timestamp, status, error, message, path, traceId, fieldErrors[]}`.
   Send back `traceId` when reporting issues; echo/forward `X-Trace-Id` for
@@ -49,22 +53,22 @@ Base URL (local/demo): `http://localhost:8080`. All JSON uses UTF-8.
 | Tag | Prefix | What it does | Key roles |
 |---|---|---|---|
 | Authentication | `/api/auth/*` | register, login, refresh, logout(-all) | public + self |
-| Candidates | `/api/candidates*`, `/api/universities` | own profile CRUD, staff lookup, public university list | CANDIDATE self; ADMIN/HR staff view |
-| Applications | `/api/applications*` | DRAFT → SUBMITTED → review lifecycle, documents attach/verify | CANDIDATE own; ADMIN/HR review |
-| Internships | `/api/internships*` | create (from application/manual), dates (= auto reclassification), assign/reassign, cancel, classification explainer | ADMIN/HR manage; candidates read own only |
-| Workflows | `*/workflow*`, `/api/workflows/*` | governed state transitions + immutable action history | ADMIN/HR execute; candidates read own |
+| Candidates | `/api/candidates*`, `/api/universities` | own profile CRUD, staff lookup, public university list | CANDIDATE self; ADMIN staff view |
+| Applications | `/api/applications*` | DRAFT → SUBMITTED → review lifecycle, documents attach/verify | CANDIDATE own; ADMIN review |
+| Internships | `/api/internships*` | create (from application/manual), dates (= auto reclassification), assign/reassign, cancel, classification explainer | ADMIN manage; supervisors/interns read scoped only |
+| Workflows | `*/workflow*`, `/api/workflows/*` | governed state transitions incl. validation decisions + immutable action history | ADMIN execute; candidates read own |
 | Companion | `/api/internships/*/tasks|journal|deliverables` | intern day-to-day: tasks, journal submit→validate, versioned deliverables | intern own; supervisor validates own interns |
 | Comments | `*/comments` | threads on journal entries, deliverables, evaluations | participants |
-| Evaluations | `/api/evaluation-templates/*`, `/api/*/evaluations*` | HR-configured templates/criteria; supervisor scoring (server-computed totals) | HR/ADMIN templates; active supervisor scores |
+| Evaluations | `/api/evaluation-templates/*`, `/api/*/evaluations*` | ADMIN-configured templates/criteria; supervisor scoring (server-computed totals) | ADMIN templates; active supervisor scores |
 | Documents | `/api/documents*`, `*/documents*` | upload (10/min), metadata, download, restricted download, verify | owner/staff; restricted needs permission+IP |
 | Messaging | `/api/conversations*` + STOMP `/ws` | private/group conversations, sequence-ordered history, read/delivered watermarks, attachments | active members only (re-checked per send) |
 | Notifications | `/api/notifications*` | own notifications, unread counts, mark read | self only |
-| Finance | `/api/finance-cases*` | open (COMPLETED OBLIGATOIRE only) → dossier → recalculate → approve/reject → receipt PDF | FINANCE/ADMIN (+HR/supervisor receipt download) |
-| Certificates | `/api/internships/*/certificates`, `/api/certificates/*` | server-generated PDF (official logo, server date), download | active supervisor; owner/staff download |
+| Finance | `/api/finance-cases*` | open (COMPLETED OBLIGATOIRE only, ADMIN) → dossier → recalculate → approve/reject (ADMIN or assigned supervisor, eligible only) → receipt PDF | ADMIN manage; supervisors scoped to assigned cases |
+| Certificates | `/api/internships/*/certificates`, `/api/certificates/*` | server-generated PDF (official logo, server date), ADMIN-only after APPROVED validation, download | ADMIN generate; owner/staff download |
 | AI Assistance | `/api/ai/*` | advisory analyses, logbook drafts, candidate Q&A, human review of recommendations (advisory only — never mutates state) | role + participant scoped; 10–20/min |
-| Reports | `/api/reports/*` | read-only aggregates: applications/internships/finance by status, payment totals by period×department | HR/DIRECTOR/ADMIN; FINANCE for treasury |
+| Reports | `/api/reports/*` | read-only aggregates: applications/internships/finance by status, payment totals by period×department | ADMIN only |
 | Audit | `/api/audit*` | paginated, filterable audit log | ADMIN only |
-| Organization | `/api/departments*`, `/api/employees*` | org chart + staff CRUD (soft-delete) | ADMIN/HR |
+| Organization | `/api/departments*`, `/api/employees*` | org chart + staff CRUD (soft-delete) | ADMIN |
 
 Real-time: STOMP over `/ws` (JWT at handshake **and** per-message membership
 re-checks); personal notifications on `/user/queue/notifications`; conversation

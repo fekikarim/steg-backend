@@ -37,8 +37,45 @@ public interface FinanceCaseRepository extends JpaRepository<FinanceCase, UUID>,
     @Query(value = "SELECT fc FROM FinanceCase fc LEFT JOIN FETCH fc.internship WHERE fc.status = :status",
            countQuery = "SELECT COUNT(fc) FROM FinanceCase fc WHERE fc.status = :status")
     Page<FinanceCase> findByStatusWithInternship(@Param("status") FinanceCaseStatus status, Pageable pageable);
-    boolean existsByReference(String reference);
 
-    @org.springframework.data.jpa.repository.Query("SELECT COUNT(f) FROM FinanceCase f WHERE f.reference LIKE :prefix%")
-    long countByReferencePrefix(@org.springframework.data.repository.query.Param("prefix") String prefix);
+    /**
+     * Supervisor scope for the finance queue.
+     *
+     * <p>The legacy employee link is an explicit LEFT JOIN on purpose: an
+     * implicit join path ({@code a.supervisor.user.id}) compiles to an INNER
+     * JOIN, so every user-backed assignment (legacy {@code supervisor_id} NULL
+     * since V36) was silently filtered out and the supervisor saw an empty
+     * queue. Same defect as
+     * {@code InternshipAssignmentRepository.findBySupervisorUserIdAndStatus}.
+     */
+    @Query(value = "SELECT fc FROM FinanceCase fc LEFT JOIN FETCH fc.internship i "
+                 + "JOIN InternshipAssignment a ON a.internship.id = i.id "
+                 + "LEFT JOIN a.supervisor legacySupervisor "
+                 + "WHERE (a.supervisorUser.id = :supervisorUserId OR legacySupervisor.user.id = :supervisorUserId) "
+                 + "AND a.status = tn.steg.backend.internship.domain.model.AssignmentStatus.ACTIVE",
+           countQuery = "SELECT COUNT(fc) FROM FinanceCase fc JOIN fc.internship i "
+                 + "JOIN InternshipAssignment a ON a.internship.id = i.id "
+                 + "LEFT JOIN a.supervisor legacySupervisor "
+                 + "WHERE (a.supervisorUser.id = :supervisorUserId OR legacySupervisor.user.id = :supervisorUserId) "
+                 + "AND a.status = tn.steg.backend.internship.domain.model.AssignmentStatus.ACTIVE")
+    Page<FinanceCase> findAllForSupervisor(@Param("supervisorUserId") UUID supervisorUserId, Pageable pageable);
+
+    @Query(value = "SELECT fc FROM FinanceCase fc LEFT JOIN FETCH fc.internship i "
+                 + "JOIN InternshipAssignment a ON a.internship.id = i.id "
+                 + "LEFT JOIN a.supervisor legacySupervisor "
+                 + "WHERE fc.status = :status "
+                 + "AND (a.supervisorUser.id = :supervisorUserId OR legacySupervisor.user.id = :supervisorUserId) "
+                 + "AND a.status = tn.steg.backend.internship.domain.model.AssignmentStatus.ACTIVE",
+           countQuery = "SELECT COUNT(fc) FROM FinanceCase fc JOIN fc.internship i "
+                 + "JOIN InternshipAssignment a ON a.internship.id = i.id "
+                 + "LEFT JOIN a.supervisor legacySupervisor "
+                 + "WHERE fc.status = :status "
+                 + "AND (a.supervisorUser.id = :supervisorUserId OR legacySupervisor.user.id = :supervisorUserId) "
+                 + "AND a.status = tn.steg.backend.internship.domain.model.AssignmentStatus.ACTIVE")
+    Page<FinanceCase> findByStatusForSupervisor(@Param("status") FinanceCaseStatus status,
+            @Param("supervisorUserId") UUID supervisorUserId, Pageable pageable);
+
+    @org.springframework.data.jpa.repository.Query(
+            value = "SELECT nextval('finance_case_reference_seq')", nativeQuery = true)
+    long nextReferenceSequence();
 }

@@ -15,6 +15,13 @@ public interface InternshipAssignmentRepository {
      */
     List<InternshipAssignment> findByInternshipIdWithDetails(UUID internshipId);
     Optional<InternshipAssignment> findByInternshipIdAndStatus(UUID internshipId, AssignmentStatus status);
+    /**
+     * ACTIVE assignments held by one supervisor user (staff-assistant scoping,
+     * supervisor dashboards). Status is a parameter so callers stay explicit.
+     */
+    List<InternshipAssignment> findBySupervisorUserIdAndStatus(UUID supervisorUserId, AssignmentStatus status);
+    /** S5 candidate queue: ACTIVE assignments of a whole page of internships in one query. */
+    List<InternshipAssignment> findByInternshipIdInAndStatus(java.util.Collection<UUID> internshipIds, AssignmentStatus status);
     InternshipAssignment save(InternshipAssignment assignment);
     InternshipAssignment saveAndFlush(InternshipAssignment assignment);
 }

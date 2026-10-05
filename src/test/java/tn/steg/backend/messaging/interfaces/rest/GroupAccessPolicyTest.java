@@ -146,7 +146,7 @@ class GroupAccessPolicyTest {
         secondCandidate.setNationalIdEncrypted("GAP2");
         secondCandidate = candidateRepository.saveAndFlush(secondCandidate);
 
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
         InternshipResponse created = internshipService.createManual(new InternshipCreateManualRequest(
                 internCandidate.getId(), LocalDate.now().minusDays(5), LocalDate.now().plusDays(60),
                 "Gap Project", "Ingénieur", false), hrPrincipal);
@@ -196,7 +196,7 @@ class GroupAccessPolicyTest {
                         .content(objectMapper.writeValueAsString(new SendMessageRequest("before completion"))))
                 .andExpect(status().isCreated());
 
-        internship.setStatus(InternshipStatus.COMPLETED);
+        internship.setStatus(InternshipStatus.VALIDATED);
         ((tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository).save(internship);
 
         // GROUP history blocked, GROUP absent from list
@@ -229,7 +229,7 @@ class GroupAccessPolicyTest {
     @Test
     @DisplayName("Revoke mode: completed leaver cannot rejoin a group")
     void completedLeaverCannotRejoin() throws Exception {
-        internship.setStatus(InternshipStatus.COMPLETED);
+        internship.setStatus(InternshipStatus.VALIDATED);
         ((tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository).save(internship);
 
         // Relinquishing access is always allowed, even when revoked

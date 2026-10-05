@@ -61,7 +61,7 @@ public class LogbookService {
                     "Only the assigned intern can submit the logbook for validation.");
         }
 
-        if (internship.getStatus() != InternshipStatus.COMPLETED) {
+        if (internship.getStatus() != InternshipStatus.VALIDATED) {
             throw new BusinessRuleException("INTERNSHIP_NOT_COMPLETED",
                     "Logbook can only be submitted for completed internships.");
         }
@@ -158,7 +158,7 @@ public class LogbookService {
     }
 
     /**
-     * HR/ADMIN finalizes a VALIDATED logbook: it becomes OFFICIAL and the
+     * ADMIN finalizes a VALIDATED logbook: it becomes OFFICIAL and the
      * lifecycle is complete (immutable thereafter). Backend-enforced rule:
      * only VALIDATED logbooks may be promoted.
      */
@@ -166,9 +166,9 @@ public class LogbookService {
     public Logbook promoteToOfficial(UUID logbookId, UserPrincipal actor) {
         Logbook logbook = findLogbookOrThrow(logbookId);
 
-        if (!actor.hasRole("ADMIN") && !actor.hasRole("HR")) {
+        if (!actor.hasRole("ADMIN")) {
             throw new BusinessRuleException("UNAUTHORIZED",
-                    "Only an HR/ADMIN user can finalize a logbook as official.");
+                    "Only an ADMIN user can finalize a logbook as official.");
         }
 
         if (logbook.getStatus() != LogbookStatus.VALIDATED) {
@@ -205,7 +205,7 @@ public class LogbookService {
     }
 
     private boolean hasSupervisorRole(Internship internship, UserPrincipal actor) {
-        if (actor.hasRole("ADMIN") || actor.hasRole("HR")) {
+        if (actor.hasRole("ADMIN")) {
             return true;
         }
         return assignmentRepository.findByInternshipIdAndStatus(

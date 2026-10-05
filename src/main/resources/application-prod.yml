@@ -30,6 +30,21 @@ springdoc:
   swagger-ui:
     enabled: false
 
+# Production exposure lockdown (security review task): the API contract is a
+# build-time artifact for the three clients, not a public surface — springdoc
+# above is disabled entirely, and the actuator keeps ONLY the load-balancer
+# health probe. info/metrics/prometheus (and every sensitive endpoint) are
+# unexposed in production; the dev/test profile keeps them for local work.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      show-components: never
+
 steg:
   security:
     jwt:

@@ -18,7 +18,7 @@ import tn.steg.backend.common.interfaces.rest.PublicEndpoint;
 @RestController
 @RequestMapping("/api/public/applications")
 @RequiredArgsConstructor
-@Tag(name = "Applications", description = "Public application identifier validation")
+@Tag(name = "Identifier Validation", description = "Public application identifier validation")
 public class IdentifierValidationController {
 
     private final IdentifierValidationService validationService;

@@ -59,7 +59,15 @@ class JwtHandshakeInterceptorTest {
     @BeforeEach
     void setUp() {
         jwtService = new JwtService(SECRET, ISSUER, 15, 7);
-        interceptor = new JwtHandshakeInterceptor(jwtService);
+        // Account-state check (Task 3): the mocked repository keeps every
+        // probed account active unless a test overrides it.
+        var userRepository = org.mockito.Mockito.mock(tn.steg.backend.iam.domain.repository.UserRepository.class);
+        org.mockito.Mockito.lenient()
+                .when(userRepository.findById(org.mockito.ArgumentMatchers.any(UUID.class)))
+                .thenAnswer(inv -> java.util.Optional.of(
+                        new tn.steg.backend.iam.domain.model.User(
+                                "ws@test.com", "hash", tn.steg.backend.iam.domain.model.UserStatus.ACTIVE)));
+        interceptor = new JwtHandshakeInterceptor(jwtService, userRepository);
         lenient().when(request.getHeaders()).thenReturn(new HttpHeaders());
     }
 

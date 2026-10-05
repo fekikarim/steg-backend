@@ -142,7 +142,7 @@ class AiCinExclusionIntegrationTest {
         Internship internship = new Internship(intRef, candidate,
                 LocalDate.now().minusMonths(4), LocalDate.now(),
                 InternshipType.PFE, InternshipRequirement.OBLIGATOIRE);
-        internship.setStatus(InternshipStatus.COMPLETED);
+        internship.setStatus(InternshipStatus.VALIDATED);
         em.persist(internship);
 
         String caseRef = "FIN-A12-" + uid();

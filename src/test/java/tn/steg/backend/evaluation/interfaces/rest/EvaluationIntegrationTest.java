@@ -127,7 +127,7 @@ class EvaluationIntegrationTest {
 
         // 1. Users & Tokens
         hrUser = userRepository.saveAndFlush(new User("hr_eval@steg.com", "hash", UserStatus.ACTIVE));
-        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        hrToken = jwtService.generateAccessToken(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
 
         supervisorUser = userRepository.saveAndFlush(new User("supervisor_eval@steg.com", "hash", UserStatus.ACTIVE));
         supervisorToken = jwtService.generateAccessToken(supervisorUser.getId(), supervisorUser.getEmail(), List.of("ROLE_SUPERVISOR"));
@@ -162,7 +162,7 @@ class EvaluationIntegrationTest {
         internCandidate = candidateRepository.saveAndFlush(internCandidate);
 
         // 4. Internship & Assignment via Service
-        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_HR"));
+        UserPrincipal hrPrincipal = new UserPrincipal(hrUser.getId(), hrUser.getEmail(), List.of("ROLE_ADMIN"));
         InternshipResponse created = internshipService.createManual(new InternshipCreateManualRequest(
                 internCandidate.getId(),
                 LocalDate.now().minusDays(30),
@@ -191,7 +191,7 @@ class EvaluationIntegrationTest {
     // -------------------------------------------------------------------------
 
     @Test
-    @DisplayName("HR can create evaluation template and criteria")
+    @DisplayName("ADMIN can create evaluation template and criteria")
     void hrCanCreateTemplateAndCriteria() throws Exception {
         EvaluationTemplateRequest tReq = new EvaluationTemplateRequest(
                 "Final Engineering Evaluation",

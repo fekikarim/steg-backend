@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 import tn.steg.backend.notification.domain.model.Notification;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -13,4 +14,8 @@ public interface JpaNotificationRepository
         tn.steg.backend.notification.domain.repository.NotificationRepository {
 
     Optional<Notification> findByDedupeKey(String dedupeKey);
+
+    /** Notifications attached to one business entity, oldest first. */
+    List<Notification> findByRelatedEntityTypeAndRelatedEntityIdOrderByCreatedAtAsc(
+            String relatedEntityType, UUID relatedEntityId);
 }

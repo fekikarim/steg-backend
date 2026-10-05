@@ -22,11 +22,13 @@ import tn.steg.backend.candidate.domain.model.University;
 import tn.steg.backend.candidate.infrastructure.persistence.CandidateRepository;
 import tn.steg.backend.candidate.infrastructure.persistence.UniversityRepository;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.support.InternshipLifecycleFixture;
 import tn.steg.backend.common.infrastructure.config.JpaAuditingConfig;
 import tn.steg.backend.finance.application.FinanceService;
 import tn.steg.backend.iam.domain.model.User;
 import tn.steg.backend.iam.domain.model.UserStatus;
 import tn.steg.backend.iam.infrastructure.persistence.UserRepository;
+import tn.steg.backend.internship.application.InternshipLifecycleService;
 import tn.steg.backend.internship.application.InternshipService;
 import tn.steg.backend.internship.application.dto.InternshipAssignmentRequest;
 import tn.steg.backend.internship.application.dto.InternshipCreateManualRequest;
@@ -38,6 +40,10 @@ import tn.steg.backend.internship.domain.model.InternshipStatus;
 import tn.steg.backend.internship.domain.repository.InternshipAssignmentRepository;
 import tn.steg.backend.internship.domain.repository.InternshipRepository;
 import tn.steg.backend.messaging.application.MessagingService;
+import tn.steg.backend.workflow.application.WorkflowService;
+import tn.steg.backend.workflow.application.dto.WorkflowTransitionRequest;
+import tn.steg.backend.workflow.domain.model.ApprovalDecision;
+import tn.steg.backend.workflow.domain.model.WorkflowActionType;
 import tn.steg.backend.messaging.domain.model.Conversation;
 import tn.steg.backend.messaging.domain.model.ConversationMember;
 import tn.steg.backend.messaging.domain.model.ConversationMemberRole;
@@ -88,10 +94,13 @@ class HotPathQueryCountTest {
     @Autowired private MessageRepository messageRepository;
     @Autowired private ApplicationService applicationService;
     @Autowired private InternshipService internshipService;
+    @Autowired private InternshipLifecycleService lifecycleService;
     @Autowired private MessagingService messagingService;
     @Autowired private FinanceService financeService;
+    @Autowired private WorkflowService workflowService;
     @Autowired private tn.steg.backend.certificate.application.CertificateService certificateService;
-
+    @Autowired private tn.steg.backend.reporting.application.DashboardSummaryService dashboardSummaryService;
+    @Autowired private tn.steg.backend.companion.infrastructure.persistence.TaskRepository taskRepository;
     private UserPrincipal adminPrincipal;
     private UserPrincipal financePrincipal;
     private UserPrincipal supervisorPrincipal;
@@ -106,7 +115,7 @@ class HotPathQueryCountTest {
         User admin = userRepository.saveAndFlush(new User("qc_admin@test.tn", "hash", UserStatus.ACTIVE));
         adminPrincipal = new UserPrincipal(admin.getId(), admin.getEmail(), List.of("ROLE_ADMIN"));
         User finance = userRepository.saveAndFlush(new User("qc_fin@test.tn", "hash", UserStatus.ACTIVE));
-        financePrincipal = new UserPrincipal(finance.getId(), finance.getEmail(), List.of("ROLE_FINANCE"));
+        financePrincipal = new UserPrincipal(finance.getId(), finance.getEmail(), List.of("ROLE_ADMIN"));
 
         department = departmentRepository.saveAndFlush(new Department("QC_DEPT", "QC Department", "QC"));
         User supUser = userRepository.saveAndFlush(new User("qc_sup@test.tn", "hash", UserStatus.ACTIVE));
@@ -283,17 +292,69 @@ class HotPathQueryCountTest {
     void financeCaseListIsBounded() {
         for (int i = 1; i <= 3; i++) {
             Internship internship = seedInternship(candidates.get(i - 1), "F" + i);
-            internship.setStatus(InternshipStatus.COMPLETED);
-            internshipRepository.save(internship);
+            InternshipLifecycleFixture.startAndValidate(
+                    lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository, internship.getId(), adminPrincipal);
+            InternshipLifecycleFixture.startAndValidate(
+                    lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository, internship.getId(), adminPrincipal);
+            InternshipLifecycleFixture.startAndValidate(
+                    lifecycleService,
+                (tn.steg.backend.internship.domain.repository.InternshipRepository) internshipRepository, internship.getId(), adminPrincipal);
             // E1.3: cases require a generated certificate.
             certificateService.generateCertificate(internship.getId(), supervisorPrincipal);
             financeService.openFinanceCase(internship.getId(), financePrincipal);
         }
 
         long queries = countQueries(() ->
-                assertThat(financeService.listFinanceCases(null, PageRequest.of(0, 10)).getContent()).hasSize(3));
+                assertThat(financeService.listFinanceCases(null, PageRequest.of(0, 10), financePrincipal).getContent()).hasSize(3));
 
         assertThat(queries).as("finance list page must be bounded, was %d", queries)
                 .isLessThanOrEqualTo(12);
+    }
+
+    @Test
+    @DisplayName("admin dashboard summary is a fixed aggregate batch for any row count")
+    void adminDashboardSummaryIsBounded() {
+        seedApplications();
+        for (int i = 0; i < 3; i++) {
+            seedInternship(candidates.get(i), "G" + i);
+        }
+
+        long queries = countQueries(() ->
+                assertThat(dashboardSummaryService.adminSummary().trends()).hasSize(6));
+
+        assertThat(queries).as("admin summary must be a fixed aggregate batch, was %d", queries)
+                .isLessThanOrEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("supervisor dashboard summary is a fixed aggregate batch for any row count")
+    void supervisorDashboardSummaryIsBounded() {
+        seedApplications();
+        Internship internship = seedInternship(candidateA, "S");
+        InternshipAssignment assignment = new InternshipAssignment(
+                internship, department, supervisor, supervisor,
+                LocalDate.now().minusDays(10), LocalDate.now().minusDays(10), LocalDate.now().plusDays(10),
+                AssignmentStatus.ACTIVE);
+        assignment.setSupervisorUser(userRepository.findByEmail("qc_sup@test.tn").orElseThrow());
+        assignmentRepository.save(assignment);
+        taskRepository.saveTask(task(internship, "Bounded chore"));
+
+        long queries = countQueries(() -> {
+            var summary = dashboardSummaryService.supervisorSummary(supervisorPrincipal);
+            assertThat(summary.myCandidates()).isEqualTo(1);
+        });
+
+        assertThat(queries).as("supervisor summary must be a fixed aggregate batch, was %d", queries)
+                .isLessThanOrEqualTo(9);
+    }
+
+    private tn.steg.backend.companion.domain.model.Task task(Internship internship, String title) {
+        tn.steg.backend.companion.domain.model.Task task =
+                new tn.steg.backend.companion.domain.model.Task(
+                        internship, userRepository.findByEmail("qc_admin@test.tn").orElseThrow(), title, "seed");
+        task.setDueDate(LocalDate.now().plusDays(5));
+        return task;
     }
 }

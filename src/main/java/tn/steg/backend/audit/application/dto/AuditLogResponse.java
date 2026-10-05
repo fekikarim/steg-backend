@@ -19,7 +19,8 @@ public record AuditLogResponse(
         String newValues,
         UUID actorId,
         String actorEmail,
-        String ipAddress
+        String ipAddress,
+        String source
 ) {
     public static AuditLogResponse from(AuditLog entry) {
         return new AuditLogResponse(
@@ -32,7 +33,8 @@ public record AuditLogResponse(
                 entry.getNewValues(),
                 entry.getActor() != null ? entry.getActor().getId() : null,
                 entry.getActor() != null ? entry.getActor().getEmail() : null,
-                entry.getIpAddress()
+                entry.getIpAddress(),
+                entry.getSource() != null ? entry.getSource().name() : null
         );
     }
 }

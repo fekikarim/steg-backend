@@ -41,8 +41,8 @@ public class CompanionController {
     // -------------------------------------------------------------------------
 
     @PostMapping("/{id}/tasks")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#id)")
-    @Operation(summary = "Create task for internship")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR', 'INTERN', 'CANDIDATE')")
+    @Operation(summary = "Create task for internship (Admin, assigned Supervisor, or owning intern)")
     public ResponseEntity<TaskResponse> createTask(
             @PathVariable UUID id,
             @RequestBody TaskRequest request,
@@ -51,18 +51,38 @@ public class CompanionController {
     }
 
     @GetMapping("/{id}/tasks")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#id)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR', 'INTERN', 'CANDIDATE')")
     @Operation(summary = "List tasks for internship (paginated)")
     public ResponseEntity<Page<TaskResponse>> listTasks(
             @PathVariable UUID id,
             @RequestParam(required = false) TaskStatus status,
-            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
-        return ResponseEntity.ok(companionService.listTasks(id, status, pageable));
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(companionService.listTasks(id, status, pageable, actor));
+    }
+
+    @GetMapping("/tasks")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
+    @Operation(summary = "List all tasks globally (Admin) or within supervision scope (Supervisor)")
+    public ResponseEntity<Page<TaskResponse>> listAllTasks(
+            @RequestParam(required = false) TaskStatus status,
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(companionService.listAllTasks(status, pageable, actor));
+    }
+
+    @GetMapping("/tasks/{taskId}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR', 'INTERN', 'CANDIDATE')")
+    @Operation(summary = "Get task details (Admin, assigned Supervisor, or owning intern)")
+    public ResponseEntity<TaskResponse> getTask(
+            @PathVariable UUID taskId,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(companionService.getTask(taskId, actor));
     }
 
     @PutMapping("/tasks/{taskId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#taskId)")
-    @Operation(summary = "Update task details")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR', 'INTERN', 'CANDIDATE')")
+    @Operation(summary = "Update task details (Admin, assigned Supervisor, or owning intern)")
     public ResponseEntity<TaskResponse> updateTask(
             @PathVariable UUID taskId,
             @RequestBody TaskRequest request,
@@ -71,8 +91,8 @@ public class CompanionController {
     }
 
     @PatchMapping("/tasks/{taskId}/status")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#taskId)")
-    @Operation(summary = "Update task status")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR', 'INTERN', 'CANDIDATE')")
+    @Operation(summary = "Update task status (Admin, assigned Supervisor, or owning intern)")
     public ResponseEntity<TaskResponse> updateTaskStatus(
             @PathVariable UUID taskId,
             @RequestParam TaskStatus status,
@@ -80,12 +100,44 @@ public class CompanionController {
         return ResponseEntity.ok(companionService.updateTaskStatus(taskId, status, actor));
     }
 
+    @PostMapping("/tasks/{taskId}/review")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
+    @Operation(summary = "Approve or deny a completed task")
+    public ResponseEntity<TaskResponse> reviewTask(
+            @PathVariable UUID taskId,
+            @RequestBody ValidationRequest request,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(companionService.reviewTask(taskId, request, actor));
+    }
+
+    @PostMapping("/tasks/bulk")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
+    @Operation(summary = "Apply an atomic, idempotent bulk task mutation across multiple students",
+            description = "All-or-nothing: every mutation is validated (scope + payload) before anything is written. "
+                    + "The response carries a per-item result summary in request order. "
+                    + "Send X-Idempotency-Key to make a double submit return the stored result without duplicating.")
+    public ResponseEntity<BulkTaskResponse> bulkTasks(
+            @RequestBody List<BulkTaskMutation> mutations,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(companionService.bulkTasks(mutations, actor));
+    }
+
+    @DeleteMapping("/tasks/{taskId}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
+    @Operation(summary = "Delete one task (Admin or assigned Supervisor; out-of-scope is 404)")
+    public ResponseEntity<Void> deleteTask(
+            @PathVariable UUID taskId,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        companionService.deleteTask(taskId, actor);
+        return ResponseEntity.noContent().build();
+    }
+
     // -------------------------------------------------------------------------
     // Journal Entries
     // -------------------------------------------------------------------------
 
     @GetMapping("/{id}/journal/entries")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#id)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#id)")
     @Operation(summary = "List journal entries for internship (paginated, with date/status filters)")
     public ResponseEntity<Page<JournalEntryResponse>> listJournalEntries(
             @PathVariable UUID id,
@@ -97,7 +149,7 @@ public class CompanionController {
     }
 
     @PostMapping("/{id}/journal/entries")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isInternOf(#id)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isInternOf(#id)")
     @Operation(summary = "Create journal entry (Draft)")
     public ResponseEntity<JournalEntryResponse> createJournalEntry(
             @PathVariable UUID id,
@@ -107,7 +159,7 @@ public class CompanionController {
     }
 
     @PostMapping("/journal/entries/{entryId}/submit")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isInternOf(#entryId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isInternOf(#entryId)")
     @Operation(summary = "Submit journal entry (DRAFT/REJECTED -> SUBMITTED)")
     public ResponseEntity<JournalEntryResponse> submitJournalEntry(
             @PathVariable UUID entryId,
@@ -116,7 +168,7 @@ public class CompanionController {
     }
 
     @PostMapping("/journal/entries/{entryId}/validate")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isSupervisorOf(#entryId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isSupervisorOf(#entryId)")
     @Operation(summary = "Validate journal entry (Supervisor only)")
     public ResponseEntity<JournalEntryResponse> validateJournalEntry(
             @PathVariable UUID entryId,
@@ -126,7 +178,7 @@ public class CompanionController {
     }
 
     @PostMapping("/journal/entries/{entryId}/reject")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isSupervisorOf(#entryId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isSupervisorOf(#entryId)")
     @Operation(summary = "Reject journal entry (Supervisor only)")
     public ResponseEntity<JournalEntryResponse> rejectJournalEntry(
             @PathVariable UUID entryId,
@@ -140,7 +192,7 @@ public class CompanionController {
     // -------------------------------------------------------------------------
 
     @GetMapping("/{id}/deliverables")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#id)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#id)")
     @Operation(summary = "List deliverables for internship (paginated)")
     public ResponseEntity<Page<DeliverableResponse>> listDeliverables(
             @PathVariable UUID id,
@@ -149,14 +201,14 @@ public class CompanionController {
     }
 
     @GetMapping("/deliverables/{deliverableId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#deliverableId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#deliverableId)")
     @Operation(summary = "Get deliverable details")
     public ResponseEntity<DeliverableResponse> getDeliverable(@PathVariable UUID deliverableId) {
         return ResponseEntity.ok(companionService.getDeliverable(deliverableId));
     }
 
     @PostMapping(value = "/{id}/deliverables", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isInternOf(#id)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isInternOf(#id)")
     @Operation(summary = "Create deliverable with initial file (v1)")
     public ResponseEntity<DeliverableResponse> createDeliverable(
             @PathVariable UUID id,
@@ -169,7 +221,7 @@ public class CompanionController {
     }
 
     @PostMapping(value = "/deliverables/{deliverableId}/versions", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isInternOf(#deliverableId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isInternOf(#deliverableId)")
     @Operation(summary = "Upload new version of deliverable")
     public ResponseEntity<DeliverableResponse> uploadNewVersion(
             @PathVariable UUID deliverableId,
@@ -180,14 +232,14 @@ public class CompanionController {
     }
 
     @GetMapping("/deliverables/{deliverableId}/versions")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#deliverableId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#deliverableId)")
     @Operation(summary = "List all versions of a deliverable")
     public ResponseEntity<List<DeliverableVersionResponse>> listDeliverableVersions(@PathVariable UUID deliverableId) {
         return ResponseEntity.ok(companionService.listDeliverableVersions(deliverableId));
     }
 
     @PostMapping("/deliverables/{deliverableId}/submit")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isInternOf(#deliverableId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isInternOf(#deliverableId)")
     @Operation(summary = "Submit deliverable (DRAFT/REJECTED -> SUBMITTED)")
     public ResponseEntity<DeliverableResponse> submitDeliverable(
             @PathVariable UUID deliverableId,
@@ -196,7 +248,7 @@ public class CompanionController {
     }
 
     @PostMapping("/deliverables/{deliverableId}/validate")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isSupervisorOf(#deliverableId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isSupervisorOf(#deliverableId)")
     @Operation(summary = "Validate deliverable (Supervisor only)")
     public ResponseEntity<DeliverableResponse> validateDeliverable(
             @PathVariable UUID deliverableId,
@@ -206,7 +258,7 @@ public class CompanionController {
     }
 
     @PostMapping("/deliverables/{deliverableId}/reject")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isSupervisorOf(#deliverableId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isSupervisorOf(#deliverableId)")
     @Operation(summary = "Reject deliverable (Supervisor only)")
     public ResponseEntity<DeliverableResponse> rejectDeliverable(
             @PathVariable UUID deliverableId,
@@ -216,7 +268,7 @@ public class CompanionController {
     }
 
     @GetMapping("/deliverables/{deliverableId}/download")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HR') or @authz.isParticipantOf(#deliverableId)")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#deliverableId)")
     @Operation(summary = "Download deliverable file (latest or specified version)")
     public ResponseEntity<InputStreamResource> downloadDeliverable(
             @PathVariable UUID deliverableId,

@@ -28,8 +28,31 @@ public interface JpaNotificationDeliveryRepository
 
     @Query("select d from NotificationDelivery d where d.recipient.id = :recipientId "
             + "and d.channel = tn.steg.backend.notification.domain.model.NotificationChannel.IN_APP "
+            + "and (cast(:from as timestamp) is null or d.createdAt >= :from) "
+            + "and (cast(:toExclusive as timestamp) is null or d.createdAt < :toExclusive) "
+            + "order by d.createdAt desc")
+    Page<NotificationDelivery> findInAppByRecipientIdAndDateRange(
+            @Param("recipientId") UUID recipientId,
+            @Param("from") Instant from,
+            @Param("toExclusive") Instant toExclusive,
+            Pageable pageable);
+
+    @Query("select d from NotificationDelivery d where d.recipient.id = :recipientId "
+            + "and d.channel = tn.steg.backend.notification.domain.model.NotificationChannel.IN_APP "
             + "and d.readAt is null order by d.createdAt desc")
     Page<NotificationDelivery> findUnreadInAppByRecipientId(@Param("recipientId") UUID recipientId, Pageable pageable);
+
+    @Query("select d from NotificationDelivery d where d.recipient.id = :recipientId "
+            + "and d.channel = tn.steg.backend.notification.domain.model.NotificationChannel.IN_APP "
+            + "and d.readAt is null "
+            + "and (cast(:from as timestamp) is null or d.createdAt >= :from) "
+            + "and (cast(:toExclusive as timestamp) is null or d.createdAt < :toExclusive) "
+            + "order by d.createdAt desc")
+    Page<NotificationDelivery> findUnreadInAppByRecipientIdAndDateRange(
+            @Param("recipientId") UUID recipientId,
+            @Param("from") Instant from,
+            @Param("toExclusive") Instant toExclusive,
+            Pageable pageable);
 
     @Query("select d from NotificationDelivery d where d.notification.id = :notificationId "
             + "and d.recipient.id = :recipientId "

@@ -235,7 +235,7 @@ class DocumentControllerIntegrationTest {
         String staffToken = jwtService.generateAccessToken(
                 staffUser.getId(),
                 staffUser.getEmail(),
-                List.of("ROLE_HR", "DOCUMENT_VIEW_RESTRICTED")
+                List.of("ROLE_ADMIN", "DOCUMENT_VIEW_RESTRICTED")
         );
 
         long auditCountBefore = auditLogRepository.count();
