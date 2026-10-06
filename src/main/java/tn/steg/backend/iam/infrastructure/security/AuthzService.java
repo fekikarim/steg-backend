@@ -19,6 +19,7 @@ import tn.steg.backend.messaging.domain.repository.ConversationMemberRepository;
 import tn.steg.backend.internship.domain.model.AssignmentStatus;
 import tn.steg.backend.internship.domain.model.Internship;
 import tn.steg.backend.internship.domain.model.InternshipAssignment;
+import tn.steg.backend.internship.domain.model.InternshipStatus;
 import tn.steg.backend.internship.domain.repository.InternshipAssignmentRepository;
 import tn.steg.backend.internship.domain.repository.InternshipRepository;
 import tn.steg.backend.internship.application.SupervisionScopeService;
@@ -147,6 +148,53 @@ public class AuthzService {
 
     public boolean isConversationMember(UUID conversationId) {
         return isOwnConversation(conversationId);
+    }
+
+    /**
+     * T08 / BR-39: verifies the caller may read the student community —
+     * staff (ADMIN/SUPERVISOR, who moderate) or a student with an
+     * {@code IN_PROGRESS} internship. Unknown or graduated callers get
+     * {@code false} (→ 403/404) without leaking scope.
+     */
+    @Transactional(readOnly = true)
+    public boolean isCommunityReader() {
+        if (!isAuthenticated()) {
+            return false;
+        }
+        if (hasRole("ADMIN") || hasRole("SUPERVISOR")) {
+            return true;
+        }
+        return hasActiveInternship(getCurrentUserId());
+    }
+
+    /**
+     * T08 / D7: verifies the caller may write to the community
+     * (posts/comments/reports) — students with an {@code IN_PROGRESS}
+     * internship only. Staff read and moderate but never publish.
+     */
+    @Transactional(readOnly = true)
+    public boolean canParticipateInCommunity() {
+        if (!isAuthenticated()) {
+            return false;
+        }
+        if (hasRole("ADMIN") || hasRole("SUPERVISOR")) {
+            return false;
+        }
+        return hasActiveInternship(getCurrentUserId());
+    }
+
+    private boolean hasActiveInternship(UUID userId) {
+        if (userId == null) {
+            return false;
+        }
+        try {
+            return !internshipRepository
+                    .findByCandidateUserIdAndStatus(userId, InternshipStatus.IN_PROGRESS)
+                    .isEmpty();
+        } catch (Exception e) {
+            log.debug("Community standing check failed for user={}: {}", userId, e.getMessage());
+            return false;
+        }
     }
 
     // -------------------------------------------------------------------------

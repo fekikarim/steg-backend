@@ -33,6 +33,8 @@ public sealed interface DomainEvent
         TaskScheduledVisibleEvent,
         JournalEntryValidatedEvent,
         NewPrivateMessageEvent,
+        CommunityCommentEvent,
+        CommunityRemovalEvent,
         PaymentApprovedEvent,
         CertificateAvailableEvent,
         CandidateValidatedEvent {

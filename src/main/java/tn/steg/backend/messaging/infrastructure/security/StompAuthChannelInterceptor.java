@@ -15,6 +15,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.community.application.CommunityService;
 import tn.steg.backend.iam.infrastructure.security.JwtService;
 import tn.steg.backend.messaging.application.MessagingService;
 
@@ -43,9 +44,11 @@ import java.util.UUID;
 public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
     private static final String CONVERSATION_TOPIC_PREFIX = "/topic/conversations/";
+    private static final String COMMUNITY_TOPIC = "/topic/community";
 
     private final JwtService jwtService;
     private final MessagingService messagingService;
+    private final CommunityService communityService;
 
     private static final java.util.Set<String> STAFF_ROLES = java.util.Set.of(
             "ROLE_ADMIN",
@@ -87,6 +90,19 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
                     log.debug("STOMP SUBSCRIBE denied for backoffice topic: destination={}, user={}",
                             destination, principal != null ? principal.getEmail() : "anonymous");
                     throw new AccessDeniedException("Access denied to back-office topic.");
+                }
+            }
+
+            // T08: the community feed topic is visible to staff and to
+            // students with an active internship only — same standing rule as
+            // the REST feed. Frames carry no body content (kind/postId/at),
+            // but eligibility is still enforced at subscribe time.
+            if (COMMUNITY_TOPIC.equals(destination)) {
+                UserPrincipal principal = currentPrincipal(accessor);
+                if (principal == null || !communityService.isCommunityVisible(principal.getId())) {
+                    log.debug("STOMP SUBSCRIBE denied for community topic: user={}",
+                            principal != null ? principal.getEmail() : "anonymous");
+                    throw new AccessDeniedException("You do not have access to the student community.");
                 }
             }
 

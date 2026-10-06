@@ -95,23 +95,25 @@ class MigrationChainIntegrationTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("empty database migrates cleanly to V56 with every slice table present")
+    @DisplayName("empty database migrates cleanly to V57 with every slice table present")
     void emptyDatabaseMigratesCleanlyToLatest() throws Exception {
         var result = flywayTo(POSTGRES, null).migrate();
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(56);
+        assertThat(result.migrationsExecuted).isEqualTo(57);
 
         try (Connection c = driver(POSTGRES)) {
             // Latest version marker.
             assertThat(queryString(c,
                     "SELECT version FROM flyway_schema_history WHERE success = true ORDER BY installed_rank DESC LIMIT 1"))
-                    .isEqualTo("56");
+                    .isEqualTo("57");
             // One table per post-V33 slice: drafts (V48), chatbot history (V49),
-            // certificate versions (V46), validation runs/decisions (V45).
+            // certificate versions (V46), validation runs/decisions (V45),
+            // community posts/comments/reports/mutes (V57).
             for (String table : java.util.List.of("ai_task_drafts", "ai_chat_messages",
                     "certificate_versions", "validation_verification_runs", "validation_decisions",
                     "audit_logs", "candidates", "internships", "internship_applications",
-                    "task_categories", "task_category_apply_batches", "task_category_apply_items")) {
+                    "task_categories", "task_category_apply_batches", "task_category_apply_items",
+                    "community_posts", "community_comments", "community_reports", "community_mutes")) {
                 assertThat(queryInt(c,
                         "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?", table))
                         .as("table %s exists", table).isEqualTo(1);

@@ -32,6 +32,7 @@ import tn.steg.backend.internship.domain.model.InternshipAssignment;
 import tn.steg.backend.internship.domain.model.InternshipStatus;
 import tn.steg.backend.internship.domain.repository.InternshipAssignmentRepository;
 import tn.steg.backend.internship.domain.repository.InternshipRepository;
+import tn.steg.backend.messaging.application.MessagingService;
 import tn.steg.backend.notification.application.NotificationService;
 import tn.steg.backend.notification.application.port.out.EmailSender;
 import tn.steg.backend.notification.domain.model.NotificationPriority;
@@ -74,6 +75,14 @@ public class SupervisorManagementService {
     private final AuditService auditService;
     private final NotificationService notificationService;
     private final tn.steg.backend.iam.domain.repository.RefreshTokenRepository refreshTokenRepository;
+    /**
+     * T07/BR-38: the PRIVATE Intern↔Supervisor thread must follow the
+     * assignment on every path that (re)binds a supervisor. Best-effort like
+     * {@code InternshipService.assign()}: a messaging failure never rolls
+     * back the assignment itself. No cycle: MessagingService depends on
+     * repositories only, never on this service.
+     */
+    private final MessagingService messagingService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Transactional(readOnly = true)
@@ -275,6 +284,8 @@ public class SupervisorManagementService {
         internship.setSupervisorUser(supervisor);
         internshipRepository.save(internship);
 
+        rebindPrivateThreadBestEffort(internship, supervisor);
+
         auditService.log("CANDIDATE_ASSIGNED", "Internship", internship.getId(),
                 null,
                 Map.of("supervisorUserId", supervisor.getId(), "assignmentId", assignment.getId() != null ? assignment.getId() : UUID.randomUUID()),
@@ -338,6 +349,8 @@ public class SupervisorManagementService {
         internship.setSupervisorUser(newSupervisor);
         internshipRepository.save(internship);
 
+        rebindPrivateThreadBestEffort(internship, newSupervisor);
+
         auditService.log("SUPERVISOR_REASSIGNED", "Internship", internship.getId(),
                 Map.of("oldSupervisorUserId", oldSupervisor != null ? oldSupervisor.getId() : "NONE"),
                 Map.of("newSupervisorUserId", newSupervisor.getId(), "reason", request.reason() != null ? request.reason() : ""),
@@ -353,6 +366,32 @@ public class SupervisorManagementService {
                 "Le stage " + internship.getReference() + " a été réaffecté au superviseur " + newSupervisor.getEmail(),
                 NotificationPriority.NORMAL, "Internship", internship.getId(),
                 recipientIds, actor != null ? actor.getId() : null);
+    }
+
+    /**
+     * T07/BR-38: rebinds the PRIVATE Intern↔Supervisor thread to exactly the
+     * current intern + current supervisor (new supervisor gains access and
+     * history, stale supervisors lose access). Best-effort: a messaging
+     * failure is logged and never rolls back the assignment itself — same
+     * posture as {@code InternshipService.assign()}.
+     */
+    private void rebindPrivateThreadBestEffort(Internship internship, User supervisor) {
+        try {
+            if (internship.getCandidate() != null
+                    && internship.getCandidate().getUser() != null
+                    && supervisor != null) {
+                messagingService.ensurePrivateThread(
+                        internship,
+                        internship.getCandidate().getUser(),
+                        supervisor);
+            } else {
+                log.warn("Skipping private thread rebind for internship {}: missing intern/supervisor user link",
+                        internship.getReference());
+            }
+        } catch (Exception e) {
+            log.error("Failed to rebind private thread for internship {}: {}",
+                    internship.getReference(), e.getMessage());
+        }
     }
 
     private SupervisorResponse toResponse(User user) {

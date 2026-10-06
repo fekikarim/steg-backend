@@ -37,6 +37,7 @@ import tn.steg.backend.internship.domain.repository.InternshipRepository;
 import tn.steg.backend.notification.application.NotificationService;
 import tn.steg.backend.notification.application.port.out.EmailSender;
 import tn.steg.backend.organization.domain.model.Department;
+import tn.steg.backend.messaging.application.MessagingService;
 import tn.steg.backend.organization.domain.repository.DepartmentRepository;
 
 import java.time.LocalDate;
@@ -68,6 +69,7 @@ class SupervisorManagementServiceTest {
     private AuditService auditService;
     private NotificationService notificationService;
     private RefreshTokenRepository refreshTokenRepository;
+    private MessagingService messagingService;
     private SupervisorManagementService service;
 
     private UserPrincipal admin;
@@ -84,13 +86,14 @@ class SupervisorManagementServiceTest {
         auditService = mock(AuditService.class);
         notificationService = mock(NotificationService.class);
         refreshTokenRepository = mock(RefreshTokenRepository.class);
+        messagingService = mock(MessagingService.class);
 
         when(passwordEncoder.encode(any())).thenAnswer(inv -> "hashed:" + inv.getArgument(0));
 
         service = new SupervisorManagementService(
                 userRepository, roleRepository, internshipRepository, assignmentRepository,
                 departmentRepository, passwordEncoder, emailSender, auditService, notificationService,
-                refreshTokenRepository);
+                refreshTokenRepository, messagingService);
 
         admin = new UserPrincipal(UUID.randomUUID(), "admin@steg.tn", List.of("ADMIN"));
     }

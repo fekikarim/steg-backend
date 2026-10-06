@@ -45,15 +45,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * specification, the annotations the implementation, and the tripwire test
  * fails if they ever drift apart).
  *
- * <p>Three tables partition every Spring MVC endpoint (206 mappings):
+ * <p>Three tables partition every Spring MVC endpoint (220 mappings):
  * <ul>
  *   <li>{@link #ADMIN_ONLY} (70) — §3.3 reserves the capability to Admin
  *       (applications/certificate/finance/validation/supervisor/account
  *       management, audit, org reference data, admin dashboards/reports).
  *       Probed: Supervisor → 403, anonymous → 401.</li>
- *   <li>{@link #SUPERVISOR_ALLOWED} (127) — §3.3 grants the capability to
+ *   <li>{@link #SUPERVISOR_ALLOWED} (141) — §3.3 grants the capability to
  *       Supervisor (own-scope candidates/tasks/drafts/chatbot/notifications/
- *       conversations, shared candidate/application surfaces, scoped reads).
+ *       conversations, shared candidate/application surfaces, scoped reads,
+ *       student community incl. staff moderation).
  *       Row-level 404 scoping inside these endpoints is proven per module
  *       (see the audit); this table only classifies the method-security
  *       layer.</li>
@@ -316,6 +317,22 @@ class AdminOnlyEndpointSecurityTest {
             "GET /api/conversations/unread/counts",
             "GET /api/conversations/messages/{messageId}/attachments",
             "GET /api/conversations/attachments/{attachmentId}/download",
+            // T08 student community (BR-39): staff read + moderate, students
+            // read + write; row-level standing re-checked in the service.
+            "GET /api/community/posts",
+            "GET /api/community/posts/{postId}",
+            "GET /api/community/posts/{postId}/comments",
+            "POST /api/community/posts",
+            "POST /api/community/posts/with-attachment",
+            "DELETE /api/community/posts/{postId}",
+            "POST /api/community/posts/{postId}/comments",
+            "DELETE /api/community/comments/{commentId}",
+            "POST /api/community/reports",
+            "GET /api/community/posts/attachments/{attachmentId}/download",
+            "GET /api/community/moderation/reports",
+            "POST /api/community/moderation/reports/{reportId}/resolve",
+            "POST /api/community/moderation/mutes",
+            "DELETE /api/community/moderation/mutes/{userId}",
             // §8.3 supervisor-scoped dashboard.
             "GET /api/reports/supervisor-summary");
 

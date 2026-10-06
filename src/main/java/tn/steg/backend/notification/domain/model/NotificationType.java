@@ -34,7 +34,13 @@ public enum NotificationType {
     PAYMENT_APPROVED,
     CERTIFICATE_AVAILABLE,
     MESSAGE_RECEIVED,
-    WELCOME;
+    WELCOME,
+    /** T08/D7: someone commented on your community post. */
+    COMMUNITY_COMMENT,
+    /** T08/D7: a moderator removed your community post (reason in message). */
+    COMMUNITY_POST_REMOVED,
+    /** T08/D7: a moderator removed your community comment (reason in message). */
+    COMMUNITY_COMMENT_REMOVED;
 
     /**
      * Tolerant parse for the wire: unknown or absent values become

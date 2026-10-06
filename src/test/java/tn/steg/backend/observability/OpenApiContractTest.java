@@ -78,7 +78,9 @@ class OpenApiContractTest {
                 "/api/documents", "/api/applications/{id}/documents",
                 "/api/audit", "/api/audit/{id}",
                 "/api/reports/applications-by-status", "/api/reports/payment-totals",
-                "/api/ai/assistant/query", "/api/ai/applications/{id}/analyze"
+                "/api/ai/assistant/query", "/api/ai/applications/{id}/analyze",
+                "/api/community/posts", "/api/community/posts/{postId}",
+                "/api/community/posts/{postId}/comments"
         }) {
             assertThat(paths.has(expected)).as("missing expected path %s", expected).isTrue();
         }

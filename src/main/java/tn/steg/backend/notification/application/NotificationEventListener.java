@@ -19,6 +19,8 @@ import tn.steg.backend.common.domain.event.InternshipStatusChangedEvent;
 import tn.steg.backend.common.domain.event.JournalEntryValidatedEvent;
 import tn.steg.backend.common.domain.event.CertificateAvailableEvent;
 import tn.steg.backend.common.domain.event.CandidateValidatedEvent;
+import tn.steg.backend.common.domain.event.CommunityCommentEvent;
+import tn.steg.backend.common.domain.event.CommunityRemovalEvent;
 import tn.steg.backend.common.domain.event.NewPrivateMessageEvent;
 import tn.steg.backend.common.domain.event.PaymentApprovedEvent;
 import tn.steg.backend.common.domain.event.TaskAssignedEvent;
@@ -386,6 +388,53 @@ public class NotificationEventListener {
                 NotificationPriority.LOW,
                 "Conversation", event.conversationId(),
                 event.recipientIds(), event.actorId());
+    }
+
+    /**
+     * T08 — someone answered your community post. Deep-links to the post
+     * (relatedEntityType {@code CommunityPost}); the commenter is named by
+     * display name, never by email. No self-notification: the publisher only
+     * emits this event for other authors' comments.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onCommunityComment(CommunityCommentEvent event) {
+        if (event.postAuthorId() == null) {
+            return;
+        }
+        notificationService.dispatchOnce(NotificationType.COMMUNITY_COMMENT,
+                "COMMUNITY_COMMENT:" + event.commentId(),
+                "New reply",
+                event.commenterDisplayName() + " replied to your community post.",
+                NotificationPriority.NORMAL,
+                "CommunityPost", event.postId(),
+                listOf(event.postAuthorId()), event.actorId());
+    }
+
+    /**
+     * T08 / D7 — a moderator removed your post or comment. The reason travels
+     * in the message; the moderator identity never does. Comment removals
+     * deep-link to the parent post.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onCommunityRemoval(CommunityRemovalEvent event) {
+        if (event.authorId() == null) {
+            return;
+        }
+        boolean post = event.post();
+        String title = post ? "Post removed" : "Comment removed";
+        String detail = event.reason() != null && !event.reason().isBlank()
+                ? " Reason: " + event.reason().strip()
+                : "";
+        notificationService.dispatchOnce(
+                post ? NotificationType.COMMUNITY_POST_REMOVED
+                        : NotificationType.COMMUNITY_COMMENT_REMOVED,
+                (post ? "COMMUNITY_POST_REMOVED:" : "COMMUNITY_COMMENT_REMOVED:")
+                        + (post ? event.postId() : event.commentId()),
+                title,
+                "A moderator removed your community " + (post ? "post." : "comment.") + detail,
+                NotificationPriority.NORMAL,
+                "CommunityPost", event.postId(),
+                listOf(event.authorId()), event.actorId());
     }
 
     /**
