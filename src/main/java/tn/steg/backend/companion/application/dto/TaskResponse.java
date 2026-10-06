@@ -21,7 +21,14 @@ public record TaskResponse(
         Instant completedAt,
         String reviewReason,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        /**
+         * T04/D8 scheduled visibility (null = immediate). Staff-authored
+         * scheduling metadata, not T03-private: it feeds the supervisor
+         * "scheduled" badge and the student's own (already visible) tasks.
+         * Hidden tasks are never served to interns in the first place.
+         */
+        Instant visibleFrom
 ) {
     public static TaskResponse from(Task task) {
         String createdByEmail = task.getCreatedBy() != null ? task.getCreatedBy().getEmail() : null;
@@ -42,7 +49,8 @@ public record TaskResponse(
                 task.getCompletedAt(),
                 task.getReviewReason(),
                 task.getCreatedAt(),
-                task.getUpdatedAt()
+                task.getUpdatedAt(),
+                task.getVisibleFrom()
         );
     }
 }

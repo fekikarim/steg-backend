@@ -53,6 +53,15 @@ public class Task extends BaseEntity {
     @Column(name = "completed_at")
     private Instant completedAt;
 
+    /**
+     * T04/D8 scheduled visibility (SU-TASK-04): null = visible immediately.
+     * A future instant hides the task from the student in every
+     * student-facing read until it passes; staff always sees it. Compared
+     * against {@code Instant.now()} — absolute, never device-local.
+     */
+    @Column(name = "visible_from")
+    private Instant visibleFrom;
+
     @Column(name = "review_reason", columnDefinition = "TEXT")
     private String reviewReason;
 

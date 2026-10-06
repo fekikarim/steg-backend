@@ -30,6 +30,7 @@ import tn.steg.backend.companion.application.dto.TaskCategoryResponse;
 import tn.steg.backend.companion.application.dto.UndoApplyBatchResponse;
 import tn.steg.backend.companion.domain.model.Task;
 import tn.steg.backend.companion.domain.model.TaskCategory;
+import tn.steg.backend.companion.domain.model.TaskCompletionPolicy;
 import tn.steg.backend.companion.domain.model.TaskCategoryApplyBatch;
 import tn.steg.backend.companion.domain.model.TaskCategoryApplyItem;
 import tn.steg.backend.companion.domain.repository.TaskCategoryApplyBatchRepository;
@@ -98,7 +99,9 @@ public class TaskCategoryService {
         Internship internship = findOwnedInternshipOrThrow(actor, internshipId);
         List<TaskCategory> categories = ownedCategories(actor);
         Map<UUID, UUID> assignments = new LinkedHashMap<>();
-        for (Task task : taskRepository.findByInternshipId(internship.getId())) {
+        // T04/D8: hidden scheduled tasks never leak through the board.
+        for (Task task : TaskCompletionPolicy.withoutHidden(
+                taskRepository.findByInternshipId(internship.getId()), java.time.Instant.now())) {
             if (task.getTaskCategory() != null) {
                 assignments.put(task.getId(), task.getTaskCategory().getId());
             }
@@ -372,7 +375,9 @@ public class TaskCategoryService {
                     "Create at least one category first — the AI can only propose your own categories.");
         }
         List<Task> unclassified = new ArrayList<>();
-        for (Task task : taskRepository.findByInternshipId(internship.getId())) {
+        // T04/D8: hidden scheduled tasks are excluded from AI suggestions too.
+        for (Task task : TaskCompletionPolicy.withoutHidden(
+                taskRepository.findByInternshipId(internship.getId()), java.time.Instant.now())) {
             if (task.getTaskCategory() == null) {
                 unclassified.add(task);
             }

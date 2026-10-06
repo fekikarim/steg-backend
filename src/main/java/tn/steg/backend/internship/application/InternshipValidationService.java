@@ -395,7 +395,11 @@ public class InternshipValidationService {
                     .filter(s -> !s.isBlank())
                     .orElse(supervisorUser.getEmail());
         }
-        List<Task> tasks = taskRepository.findByInternshipId(internship.getId());
+        // T04/D8b: not-yet-visible scheduled tasks are excluded from the
+        // denominator AND the item list (same shared rule as the student
+        // board) — total always equals the visible items.
+        List<Task> tasks = TaskCompletionPolicy.withoutHidden(
+                taskRepository.findByInternshipId(internship.getId()), java.time.Instant.now());
         TaskCompletionPolicy.CompletionRatio ratio = TaskCompletionPolicy.ratio(tasks);
         List<ResolvedDocument> docs = resolveDocument(internship);
         Optional<ResolvedDocument> report = docs.stream()
@@ -550,7 +554,9 @@ public class InternshipValidationService {
         if (pdf == null) {
             return persistDegraded(internship, doc, actor, "stored journal file is unreadable");
         }
-        List<Task> tasks = taskRepository.findByInternshipId(internship.getId());
+        // T04/D8b: see detailOf — hidden tasks never count toward the 75 %.
+        List<Task> tasks = TaskCompletionPolicy.withoutHidden(
+                taskRepository.findByInternshipId(internship.getId()), java.time.Instant.now());
         TaskCompletionPolicy.CompletionRatio ratio = TaskCompletionPolicy.ratio(tasks);
         var expected = new DocIntelClient.JournalExpected(
                 internship.getStartDate() != null ? internship.getStartDate().toString() : "",

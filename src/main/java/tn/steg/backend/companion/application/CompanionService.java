@@ -28,6 +28,7 @@ import tn.steg.backend.companion.domain.repository.JournalEntryRepository;
 import tn.steg.backend.companion.domain.repository.TaskRepository;
 import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.audit.domain.model.AuditSource;
+import tn.steg.backend.common.application.ApplicationTimeZone;
 import tn.steg.backend.document.application.DocumentService;
 import tn.steg.backend.document.domain.model.DocumentType;
 import tn.steg.backend.document.domain.model.FileAsset;
@@ -77,6 +78,7 @@ public class CompanionService {
     private final MalwareScanner malwareScanner;
     private final AuditService auditService;
     private final SupervisionScopeService supervisionScopeService;
+    private final ApplicationTimeZone applicationTimeZone;
     private final InternshipLifecycleService internshipLifecycleService;
     private final IdempotencyService idempotencyService;
 
@@ -123,6 +125,13 @@ public class CompanionService {
                 task.setCompletedAt(Instant.now());
             }
         }
+        // T04/D8: scheduling is a staff-only write, validated against the
+        // internship period. Null on create = visible immediately.
+        if (request.visibleFrom() != null) {
+            ensureStaffScheduling(actor, internshipId);
+            checkVisibleFromWithinPeriod(request.visibleFrom(), internship);
+            task.setVisibleFrom(request.visibleFrom());
+        }
 
         task = taskRepository.saveTask(task);
         log.info("Task created: id={}, internship={}, creator={}", task.getId(), internshipId, creator.getId());
@@ -131,12 +140,16 @@ public class CompanionService {
         Map<String, Object> taskAudit = NullSafe.mapOf(
                 "internshipId", internshipId,
                 "title", task.getTitle(),
-                "assignedToId", assignedTo != null ? assignedTo.getId() : null);
+                "assignedToId", assignedTo != null ? assignedTo.getId() : null,
+                "visibleFrom", task.getVisibleFrom());
         auditService.log("COMPANION_TASK_CREATED", "Task", task.getId(), null,
                 taskAudit, actor.getId(), null);
 
         // Phase A10: notify the assignee (not for self-assigned tasks).
-        if (assignedTo != null && !assignedTo.getId().equals(creator.getId())) {
+        // T06 §6: a hidden scheduled task notifies nobody yet — the
+        // visibility sweep notifies the intern on appearance instead.
+        if (assignedTo != null && !assignedTo.getId().equals(creator.getId())
+                && !TaskCompletionPolicy.isHidden(task, Instant.now())) {
             eventPublisher.publishEvent(new TaskAssignedEvent(
                     task.getId(), task.getTitle(), internshipId, assignedTo.getId(), actor.getId()));
         }
@@ -149,9 +162,20 @@ public class CompanionService {
         if (actor != null && !supervisionScopeService.canManage(actor, internshipId) && !isInternOfInternship(internship, actor)) {
             throw new ResourceNotFoundException("Internship not found: " + internshipId);
         }
-        Page<Task> page = (status != null)
-                ? taskRepository.findByInternshipIdAndStatus(internshipId, status, pageable)
-                : taskRepository.findByInternshipId(internshipId, pageable);
+        // T04/D8: interns never see not-yet-visible tasks (list, counts and
+        // progress all read through here). Staff keeps the complete view.
+        boolean staffView = actor == null || supervisionScopeService.canManage(actor, internshipId);
+        Page<Task> page;
+        if (staffView) {
+            page = (status != null)
+                    ? taskRepository.findByInternshipIdAndStatus(internshipId, status, pageable)
+                    : taskRepository.findByInternshipId(internshipId, pageable);
+        } else {
+            Instant now = Instant.now();
+            page = (status != null)
+                    ? taskRepository.findVisibleByInternshipIdAndStatus(internshipId, status, now, pageable)
+                    : taskRepository.findVisibleByInternshipId(internshipId, now, pageable);
+        }
         return page.map(TaskResponse::from);
     }
 
@@ -187,6 +211,7 @@ public class CompanionService {
         if (actor != null && !supervisionScopeService.canManage(actor, internshipId) && !isInternOfTask(task, actor)) {
             throw new ResourceNotFoundException("Task not found: " + taskId);
         }
+        ensureVisibleToIntern(task, actor, internshipId);
         return TaskResponse.from(task);
     }
 
@@ -198,6 +223,7 @@ public class CompanionService {
         if (actor != null && !supervisionScopeService.canManage(actor, internshipId) && !isInternOfTask(task, actor)) {
             throw new ResourceNotFoundException("Task not found: " + taskId);
         }
+        ensureVisibleToIntern(task, actor, internshipId);
 
         if (request.title() != null && !request.title().isBlank()) {
             task.setTitle(request.title());
@@ -210,6 +236,14 @@ public class CompanionService {
         }
         if (request.dueDate() != null) {
             task.setDueDate(request.dueDate());
+        }
+        // T04/D8: rescheduling is a staff-only write. Null = leave the
+        // current schedule unchanged (send a past instant to make a
+        // scheduled task immediate); status is never touched here for that.
+        if (request.visibleFrom() != null) {
+            ensureStaffScheduling(actor, internshipId);
+            checkVisibleFromWithinPeriod(request.visibleFrom(), task.getInternship());
+            task.setVisibleFrom(request.visibleFrom());
         }
         if (request.status() != null) {
             task.setStatus(request.status());
@@ -226,6 +260,7 @@ public class CompanionService {
         updateAudit.put("title", task.getTitle());
         updateAudit.put("status", task.getStatus());
         updateAudit.put("assignedToId", task.getAssignedTo() != null ? task.getAssignedTo().getId() : null);
+        updateAudit.put("visibleFrom", task.getVisibleFrom());
         auditService.log("COMPANION_TASK_UPDATED", "Task", task.getId(),
                 Map.of("title", task.getTitle(), "status", task.getStatus()),
                 updateAudit,
@@ -236,12 +271,22 @@ public class CompanionService {
 
     @Transactional
     public TaskResponse updateTaskStatus(UUID taskId, TaskStatus status, UserPrincipal actor) {
+        // T06/BR-56: the offline queue replays with the client's key; the
+        // scope is METHOD + URI (the target status rides the query string),
+        // so the mobile client mints one fresh UUID per logical write and
+        // reuses it only for retries of that same write.
+        return idempotencyService.execute(actor.getId(), IdempotencyService.currentKey().orElse(null),
+                () -> doUpdateTaskStatus(taskId, status, actor), TaskResponse.class);
+    }
+
+    private TaskResponse doUpdateTaskStatus(UUID taskId, TaskStatus status, UserPrincipal actor) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
         UUID internshipId = task.getInternship() != null ? task.getInternship().getId() : null;
         if (actor != null && !supervisionScopeService.canManage(actor, internshipId) && !isInternOfTask(task, actor)) {
             throw new ResourceNotFoundException("Task not found: " + taskId);
         }
+        ensureVisibleToIntern(task, actor, internshipId);
 
         task.setStatus(status);
         if (status == TaskStatus.COMPLETED) {
@@ -380,13 +425,27 @@ public class CompanionService {
     private void publishTaskStatusChanged(Task task, UserPrincipal actor) {
         UUID internshipId = task.getInternship().getId();
         UUID supervisorUserId = supervisionScopeService.findSupervisorUserId(internshipId).orElse(null);
-        UUID internUserId = task.getInternship().getCandidate() != null
-                && task.getInternship().getCandidate().getUser() != null
-                ? task.getInternship().getCandidate().getUser().getId()
-                : null;
+        UUID internUserId = visibleInternRecipient(task);
         eventPublisher.publishEvent(new TaskStatusChangedEvent(
                 task.getId(), internshipId, task.getTitle(), task.getStatus(),
                 supervisorUserId, internUserId, actor.getId()));
+    }
+
+    /**
+     * T06 §6: a not-yet-visible scheduled task never leaks to the intern —
+     * not its title, not its existence. Staff recipients are unaffected;
+     * the visibility sweep notifies the intern on appearance instead.
+     */
+    private UUID visibleInternRecipient(Task task) {
+        if (task == null || task.getInternship() == null
+                || task.getInternship().getCandidate() == null
+                || task.getInternship().getCandidate().getUser() == null) {
+            return null;
+        }
+        if (TaskCompletionPolicy.isHidden(task, Instant.now())) {
+            return null;
+        }
+        return task.getInternship().getCandidate().getUser().getId();
     }
 
     /** T01: the intern + supervisor learn that a task's editable fields changed. */
@@ -396,10 +455,7 @@ public class CompanionService {
             return;
         }
         UUID supervisorUserId = supervisionScopeService.findSupervisorUserId(internshipId).orElse(null);
-        UUID internUserId = task.getInternship().getCandidate() != null
-                && task.getInternship().getCandidate().getUser() != null
-                ? task.getInternship().getCandidate().getUser().getId()
-                : null;
+        UUID internUserId = visibleInternRecipient(task);
         eventPublisher.publishEvent(new TaskUpdatedEvent(
                 task.getId(), internshipId, task.getTitle(),
                 supervisorUserId, internUserId, actor.getId()));
@@ -417,10 +473,7 @@ public class CompanionService {
             return;
         }
         UUID supervisorUserId = supervisionScopeService.findSupervisorUserId(internshipId).orElse(null);
-        UUID internUserId = task.getInternship().getCandidate() != null
-                && task.getInternship().getCandidate().getUser() != null
-                ? task.getInternship().getCandidate().getUser().getId()
-                : null;
+        UUID internUserId = visibleInternRecipient(task);
         eventPublisher.publishEvent(new TaskDeletedEvent(
                 taskId, internshipId, task.getTitle(),
                 supervisorUserId, internUserId, actor.getId()));
@@ -436,6 +489,50 @@ public class CompanionService {
     private boolean isInternOfTask(Task task, UserPrincipal actor) {
         if (task == null || actor == null) return false;
         return isInternOfInternship(task.getInternship(), actor);
+    }
+
+    /**
+     * T04/D8: a not-yet-visible task does not exist for the intern (404, no
+     * leak). Staff ({@code canManage}) and actor-less internal reads keep
+     * the complete view.
+     */
+    private void ensureVisibleToIntern(Task task, UserPrincipal actor, UUID internshipId) {
+        if (actor == null || supervisionScopeService.canManage(actor, internshipId)) {
+            return;
+        }
+        if (TaskCompletionPolicy.isHidden(task, Instant.now())) {
+            throw new ResourceNotFoundException("Task not found: " + task.getId());
+        }
+    }
+
+    /**
+     * T04/D8: scheduling is a staff-only write. An intern sending a non-null
+     * {@code visibleFrom} is refused with 422 (not silently ignored), so a
+     * manipulated client request can never schedule.
+     */
+    private void ensureStaffScheduling(UserPrincipal actor, UUID internshipId) {
+        if (actor == null || !supervisionScopeService.canManage(actor, internshipId)) {
+            throw new BusinessRuleException("TASK_SCHEDULE_STAFF_ONLY",
+                    "Only the supervisor can schedule a task.");
+        }
+    }
+
+    /**
+     * T04/D8: the scheduled moment must fall inside the internship period
+     * (application time zone). A past moment is immediate, never an error.
+     */
+    private void checkVisibleFromWithinPeriod(Instant visibleFrom, Internship internship) {
+        if (visibleFrom == null || internship == null
+                || internship.getStartDate() == null || internship.getEndDate() == null) {
+            return;
+        }
+        java.time.LocalDate day = visibleFrom
+                .atZone(applicationTimeZone.zoneId()).toLocalDate();
+        if (day.isBefore(internship.getStartDate()) || day.isAfter(internship.getEndDate())) {
+            throw new BusinessRuleException("VISIBLE_FROM_OUTSIDE_PERIOD",
+                    "The scheduled date must be within the internship period ("
+                            + internship.getStartDate() + " to " + internship.getEndDate() + ").");
+        }
     }
 
     // -------------------------------------------------------------------------

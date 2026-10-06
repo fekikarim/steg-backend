@@ -24,6 +24,7 @@ import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.companion.application.AiTaskDraftService;
 import tn.steg.backend.companion.application.dto.BulkAddDraftsRequest;
 import tn.steg.backend.companion.application.dto.BulkAddDraftsResponse;
+import tn.steg.backend.companion.application.dto.GenerateSpecTextRequest;
 import tn.steg.backend.companion.application.dto.ManualDraftRequest;
 import tn.steg.backend.companion.application.dto.ReviseDraftRequest;
 import tn.steg.backend.companion.application.dto.TaskDraftResponse;
@@ -64,6 +65,25 @@ public class TaskDraftController {
         String filename = file == null ? null : file.getOriginalFilename();
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(draftService.generateFromSpecPdf(actor, internshipId, bytes, filename));
+    }
+
+    @PostMapping("/generate-from-text")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
+    @RateLimited(name = "ai-task-generate", limit = 10, windowSeconds = 60)
+    @Operation(summary = "Generate task drafts from pasted specification text",
+            description = "Same pipeline as the PDF path (strict JSON schema, "
+                    + "validated lengths and dates inside the internship period, "
+                    + "retried once when malformed, metadata-only audit) fed by "
+                    + "a pasted text instead of an upload. The text is data, "
+                    + "never instructions. The result is server-side DRAFTS — "
+                    + "no real task is created. Admin: any student. "
+                    + "Supervisor: own students only (404 otherwise).")
+    public ResponseEntity<List<TaskDraftResponse>> generateFromText(
+            @Valid @RequestBody GenerateSpecTextRequest request,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(draftService.generateFromSpecText(
+                        actor, request.internshipId(), request.specText()));
     }
 
     @GetMapping

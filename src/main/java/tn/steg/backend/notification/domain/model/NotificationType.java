@@ -16,6 +16,8 @@ public enum NotificationType {
     TASK_UPDATED,
     TASK_DELETED,
     TASK_STATUS_CHANGED,
+    /** T04/D8: a scheduled task became visible to the student. */
+    SCHEDULED_TASK_VISIBLE,
     DOCUMENT_REJECTED,
     DOCUMENT_VERIFIED,
     APPLICATION_SUBMITTED,

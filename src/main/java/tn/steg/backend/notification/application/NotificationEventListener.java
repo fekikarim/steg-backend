@@ -23,6 +23,7 @@ import tn.steg.backend.common.domain.event.NewPrivateMessageEvent;
 import tn.steg.backend.common.domain.event.PaymentApprovedEvent;
 import tn.steg.backend.common.domain.event.TaskAssignedEvent;
 import tn.steg.backend.common.domain.event.TaskDeletedEvent;
+import tn.steg.backend.common.domain.event.TaskScheduledVisibleEvent;
 import tn.steg.backend.common.domain.event.TaskStatusChangedEvent;
 import tn.steg.backend.common.domain.event.TaskUpdatedEvent;
 import tn.steg.backend.notification.domain.model.NotificationPriority;
@@ -317,6 +318,26 @@ public class NotificationEventListener {
                 "Task '" + event.taskTitle() + "' is now " + event.status() + ".",
                 NotificationPriority.NORMAL,
                 "Task", event.taskId(), recipients, event.actorId());
+    }
+
+    /**
+     * T04/D8: a scheduled task appeared on the student's board. Only the
+     * intern is notified (the supervisor scheduled it himself); the fan-out
+     * is deduplicated per task, so the scheduler sweep can never duplicate
+     * the alert.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onTaskScheduledVisible(TaskScheduledVisibleEvent event) {
+        if (event.internUserId() == null) {
+            return;
+        }
+        notificationService.dispatchOnce(NotificationType.SCHEDULED_TASK_VISIBLE,
+                "SCHEDULED_TASK_VISIBLE:" + event.taskId(),
+                "New task available",
+                "Task '" + event.taskTitle() + "' scheduled by your supervisor is now visible.",
+                NotificationPriority.NORMAL,
+                "Task", event.taskId(),
+                java.util.List.of(event.internUserId()), event.actorId());
     }
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)

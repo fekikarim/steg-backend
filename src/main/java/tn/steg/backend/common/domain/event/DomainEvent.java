@@ -30,6 +30,7 @@ public sealed interface DomainEvent
         TaskUpdatedEvent,
         TaskDeletedEvent,
         TaskStatusChangedEvent,
+        TaskScheduledVisibleEvent,
         JournalEntryValidatedEvent,
         NewPrivateMessageEvent,
         PaymentApprovedEvent,

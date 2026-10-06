@@ -5,6 +5,7 @@ import org.springframework.data.domain.Pageable;
 import tn.steg.backend.companion.domain.model.Task;
 import tn.steg.backend.companion.domain.model.TaskStatus;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,4 +27,16 @@ public interface TaskRepository {
     Page<Task> findByInternshipIdInAndStatus(List<UUID> internshipIds, TaskStatus status, Pageable pageable);
     Task saveTask(Task task);
     void delete(Task task);
+
+    /**
+     * T04/D8 student-facing reads: only tasks visible at {@code now}
+     * (immediate or already appeared). Staff reads use the unfiltered
+     * finders above.
+     */
+    Page<Task> findVisibleByInternshipId(UUID internshipId, Instant now, Pageable pageable);
+    Page<Task> findVisibleByInternshipIdAndStatus(
+            UUID internshipId, TaskStatus status, Instant now, Pageable pageable);
+
+    /** T04/D8 scheduler sweep: scheduled tasks whose moment has passed. */
+    List<Task> findScheduledDue(Instant now, Pageable pageable);
 }

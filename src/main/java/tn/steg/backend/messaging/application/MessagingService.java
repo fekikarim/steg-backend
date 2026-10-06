@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.candidate.domain.repository.CandidateRepository;
+import tn.steg.backend.common.application.idempotency.IdempotencyService;
 import tn.steg.backend.common.domain.event.NewPrivateMessageEvent;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
@@ -105,6 +106,7 @@ public class MessagingService {
     private final DocumentValidationService documentValidationService;
     private final MalwareScanner malwareScanner;
     private final AuditService auditService;
+    private final IdempotencyService idempotencyService;
 
     /** Business facts for cross-cutting concerns; never a dependency on consumers (Phase A10). */
     private final ApplicationEventPublisher eventPublisher;
@@ -394,6 +396,15 @@ public class MessagingService {
 
     @Transactional
     public MessageResponse sendMessage(UUID conversationId, String content, UserPrincipal actor) {
+        // T06/BR-56: the offline queue replays with the client's key; the
+        // scope is METHOD + URI (one conversation), so the mobile client
+        // mints one fresh UUID per logical message and reuses it only for
+        // retries of that same message.
+        return idempotencyService.execute(actor.getId(), IdempotencyService.currentKey().orElse(null),
+                () -> doSendMessage(conversationId, content, actor), MessageResponse.class);
+    }
+
+    private MessageResponse doSendMessage(UUID conversationId, String content, UserPrincipal actor) {
         if (content == null || content.isBlank()) {
             throw new BusinessRuleException("EMPTY_MESSAGE", "Message content must not be blank.");
         }

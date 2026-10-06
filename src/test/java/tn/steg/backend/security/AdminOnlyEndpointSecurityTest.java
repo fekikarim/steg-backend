@@ -45,13 +45,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * specification, the annotations the implementation, and the tripwire test
  * fails if they ever drift apart).
  *
- * <p>Three tables partition every Spring MVC endpoint (205 mappings):
+ * <p>Three tables partition every Spring MVC endpoint (206 mappings):
  * <ul>
  *   <li>{@link #ADMIN_ONLY} (70) — §3.3 reserves the capability to Admin
  *       (applications/certificate/finance/validation/supervisor/account
  *       management, audit, org reference data, admin dashboards/reports).
  *       Probed: Supervisor → 403, anonymous → 401.</li>
- *   <li>{@link #SUPERVISOR_ALLOWED} (126) — §3.3 grants the capability to
+ *   <li>{@link #SUPERVISOR_ALLOWED} (127) — §3.3 grants the capability to
  *       Supervisor (own-scope candidates/tasks/drafts/chatbot/notifications/
  *       conversations, shared candidate/application surfaces, scoped reads).
  *       Row-level 404 scoping inside these endpoints is proven per module
@@ -236,6 +236,7 @@ class AdminOnlyEndpointSecurityTest {
             "GET /api/internships/{internshipId}/logbook",
             // §7.4 AI drafts + §3.3 bulk (own scope enforced server-side).
             "POST /api/internships/tasks/drafts/generate",
+            "POST /api/internships/tasks/drafts/generate-from-text",
             "GET /api/internships/tasks/drafts",
             "POST /api/internships/tasks/drafts",
             "PUT /api/internships/tasks/drafts/{id}",
