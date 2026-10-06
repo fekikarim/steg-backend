@@ -11,7 +11,9 @@ import org.springframework.web.multipart.MultipartFile;
 import tn.steg.backend.common.domain.event.InternshipReportSubmittedEvent;
 import tn.steg.backend.common.domain.event.JournalEntryValidatedEvent;
 import tn.steg.backend.common.domain.event.TaskAssignedEvent;
+import tn.steg.backend.common.domain.event.TaskDeletedEvent;
 import tn.steg.backend.common.domain.event.TaskStatusChangedEvent;
+import tn.steg.backend.common.domain.event.TaskUpdatedEvent;
 import tn.steg.backend.common.application.idempotency.IdempotencyService;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
@@ -228,6 +230,7 @@ public class CompanionService {
                 Map.of("title", task.getTitle(), "status", task.getStatus()),
                 updateAudit,
                 actor.getId(), null);
+        publishTaskUpdated(task, actor);
         return TaskResponse.from(task);
     }
 
@@ -345,6 +348,7 @@ public class CompanionService {
                     taskRepository.delete(task);
                     auditService.log("COMPANION_TASK_DELETED", "Task", taskId,
                             Map.of("title", task.getTitle()), null, actor.getId(), null);
+                    publishTaskDeleted(taskId, task, actor);
                     deleted++;
                     items.add(new BulkTaskItemResult(i, mutation.action(), taskId,
                             internshipId, "OK"));
@@ -370,6 +374,7 @@ public class CompanionService {
         taskRepository.delete(task);
         auditService.log("COMPANION_TASK_DELETED", "Task", taskId,
                 Map.of("title", task.getTitle()), null, actor.getId(), null);
+        publishTaskDeleted(taskId, task, actor);
     }
 
     private void publishTaskStatusChanged(Task task, UserPrincipal actor) {
@@ -381,6 +386,43 @@ public class CompanionService {
                 : null;
         eventPublisher.publishEvent(new TaskStatusChangedEvent(
                 task.getId(), internshipId, task.getTitle(), task.getStatus(),
+                supervisorUserId, internUserId, actor.getId()));
+    }
+
+    /** T01: the intern + supervisor learn that a task's editable fields changed. */
+    private void publishTaskUpdated(Task task, UserPrincipal actor) {
+        UUID internshipId = task.getInternship() != null ? task.getInternship().getId() : null;
+        if (internshipId == null) {
+            return;
+        }
+        UUID supervisorUserId = supervisionScopeService.findSupervisorUserId(internshipId).orElse(null);
+        UUID internUserId = task.getInternship().getCandidate() != null
+                && task.getInternship().getCandidate().getUser() != null
+                ? task.getInternship().getCandidate().getUser().getId()
+                : null;
+        eventPublisher.publishEvent(new TaskUpdatedEvent(
+                task.getId(), internshipId, task.getTitle(),
+                supervisorUserId, internUserId, actor.getId()));
+    }
+
+    /**
+     * T01: delete notification. Called AFTER {@code taskRepository.delete} but
+     * inside the same transaction (BEFORE_COMMIT listener joins it), so a
+     * rollback cannot leave a phantom "task deleted" alert. The title is read
+     * from the entity before the delete.
+     */
+    private void publishTaskDeleted(UUID taskId, Task task, UserPrincipal actor) {
+        UUID internshipId = task.getInternship() != null ? task.getInternship().getId() : null;
+        if (internshipId == null) {
+            return;
+        }
+        UUID supervisorUserId = supervisionScopeService.findSupervisorUserId(internshipId).orElse(null);
+        UUID internUserId = task.getInternship().getCandidate() != null
+                && task.getInternship().getCandidate().getUser() != null
+                ? task.getInternship().getCandidate().getUser().getId()
+                : null;
+        eventPublisher.publishEvent(new TaskDeletedEvent(
+                taskId, internshipId, task.getTitle(),
                 supervisorUserId, internUserId, actor.getId()));
     }
 

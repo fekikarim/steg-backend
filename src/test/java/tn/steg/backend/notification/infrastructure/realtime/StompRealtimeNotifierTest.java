@@ -23,7 +23,7 @@ class StompRealtimeNotifierTest {
 
     private static NotificationPayload payload() {
         return new NotificationPayload(
-                UUID.randomUUID(), "Title", "Body",
+                UUID.randomUUID(), null, "Title", "Body",
                 tn.steg.backend.notification.domain.model.NotificationPriority.HIGH,
                 "Internship", UUID.randomUUID(), Instant.now());
     }

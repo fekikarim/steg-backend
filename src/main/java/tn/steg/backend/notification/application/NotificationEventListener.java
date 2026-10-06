@@ -22,8 +22,11 @@ import tn.steg.backend.common.domain.event.CandidateValidatedEvent;
 import tn.steg.backend.common.domain.event.NewPrivateMessageEvent;
 import tn.steg.backend.common.domain.event.PaymentApprovedEvent;
 import tn.steg.backend.common.domain.event.TaskAssignedEvent;
+import tn.steg.backend.common.domain.event.TaskDeletedEvent;
 import tn.steg.backend.common.domain.event.TaskStatusChangedEvent;
+import tn.steg.backend.common.domain.event.TaskUpdatedEvent;
 import tn.steg.backend.notification.domain.model.NotificationPriority;
+import tn.steg.backend.notification.domain.model.NotificationType;
 
 import java.util.List;
 import java.util.UUID;
@@ -57,7 +60,7 @@ public class NotificationEventListener {
         // Exactly-once: keyed by application — retries, refreshes, duplicate
         // clicks, timeout recovery, or event reprocessing reuse the existing
         // notification instead of sending a second confirmation email.
-        notificationService.dispatchOnce(
+        notificationService.dispatchOnce(NotificationType.APPLICATION_SUBMITTED,
                 "APP_SUBMITTED:" + event.applicationId(),
                 "Candidature soumise — En attente de validation",
                 "Votre candidature " + event.applicationReference()
@@ -72,7 +75,7 @@ public class NotificationEventListener {
                 "InternshipApplication", event.applicationId(),
                 listOf(event.candidateUserId()), event.actorId());
         // AGENTS.md §8.1: a new application request must reach every Admin.
-        notificationService.dispatchToRole(
+        notificationService.dispatchToRole(NotificationType.APPLICATION_SUBMITTED,
                 "APP_SUBMITTED_ADMIN:" + event.applicationId(),
                 NotificationService.ADMIN_ROLE_CODE,
                 "Nouvelle candidature",
@@ -93,7 +96,7 @@ public class NotificationEventListener {
         String name = event.candidateName() != null && !event.candidateName().isBlank()
                 ? event.candidateName().strip()
                 : event.candidateEmail();
-        notificationService.dispatchToRole(
+        notificationService.dispatchToRole(NotificationType.CANDIDATE_VALIDATED,
                 "CANDIDATE_VALIDATED:" + event.candidateId(),
                 NotificationService.ADMIN_ROLE_CODE,
                 "Nouveau candidat validé",
@@ -109,7 +112,7 @@ public class NotificationEventListener {
     public void onApplicationResubmitted(ApplicationResubmittedEvent event) {
         // A resubmission is a fresh review request: every Admin is alerted so
         // the corrected dossier is picked up again (AGENTS.md §4/§8.1).
-        notificationService.dispatchToRole(
+        notificationService.dispatchToRole(NotificationType.APPLICATION_RESUBMITTED,
                 "APP_RESUBMITTED:" + event.eventId(),
                 NotificationService.ADMIN_ROLE_CODE,
                 "Candidature resoumise",
@@ -195,7 +198,7 @@ public class NotificationEventListener {
         if (recipients.isEmpty()) {
             return;
         }
-        notificationService.dispatchOnce(
+        notificationService.dispatchOnce(NotificationType.INTERNSHIP_STATUS_CHANGED,
                 "INTERNSHIP_STATUS:" + event.eventId(),
                 "Internship status changed",
                 "Internship " + event.internshipReference() + " is now " + event.newStatus()
@@ -211,7 +214,7 @@ public class NotificationEventListener {
         // S7a.1: the Admin owns the validation queue (§5.11) — fan out like a
         // new application request. The supervisor and the intern are already
         // notified by the lifecycle's own status-changed event.
-        notificationService.dispatchToRole(
+        notificationService.dispatchToRole(NotificationType.INTERNSHIP_REPORT_SUBMITTED,
                 "REPORT_SUBMITTED_ADMIN:" + event.internshipId(),
                 NotificationService.ADMIN_ROLE_CODE,
                 "Rapport de stage envoyé",
@@ -225,7 +228,7 @@ public class NotificationEventListener {
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onDocumentRejected(DocumentRejectedEvent event) {
         // S8 pre-check (d): the candidate learns WHAT to fix — comment included.
-        notificationService.dispatchOnce(
+        notificationService.dispatchOnce(NotificationType.DOCUMENT_REJECTED,
                 "DOCUMENT_REJECTED:" + event.internshipId() + ":" + event.documentType(),
                 "Document refused — action required",
                 "Your " + event.documentType().toLowerCase().replace('_', ' ')
@@ -250,12 +253,56 @@ public class NotificationEventListener {
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onTaskAssigned(TaskAssignedEvent event) {
-        notificationService.dispatch(
+        notificationService.dispatch(NotificationType.TASK_ASSIGNED,
                 "New task assigned",
                 "You have been assigned the task '" + event.taskTitle() + "'.",
                 NotificationPriority.NORMAL,
                 "Task", event.taskId(),
                 listOf(event.assigneeUserId()), event.actorId());
+    }
+
+    /**
+     * T01/D11: the intern learns that a task on his board was edited by the
+     * supervisor. Recipients are the supervisor + intern resolved at publish
+     * time by CompanionService through SupervisionScopeService; a self-edit
+     * by the intern himself still informs the supervisor.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onTaskUpdated(TaskUpdatedEvent event) {
+        List<UUID> recipients = java.util.stream.Stream.of(
+                        event.supervisorUserId(), event.internUserId())
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (recipients.isEmpty()) {
+            return;
+        }
+        notificationService.dispatch(NotificationType.TASK_UPDATED,
+                "Task updated",
+                "Task '" + event.taskTitle() + "' was updated by your supervisor.",
+                NotificationPriority.NORMAL,
+                "Task", event.taskId(), recipients, event.actorId());
+    }
+
+    /**
+     * T01/D11: the intern learns that a task was removed from his board.
+     * The title travels in the event because the entity is already deleted.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onTaskDeleted(TaskDeletedEvent event) {
+        List<UUID> recipients = java.util.stream.Stream.of(
+                        event.supervisorUserId(), event.internUserId())
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (recipients.isEmpty()) {
+            return;
+        }
+        notificationService.dispatch(NotificationType.TASK_DELETED,
+                "Task deleted",
+                "Task '" + event.taskTitle() + "' was removed from your board.",
+                NotificationPriority.NORMAL,
+                "Task", event.taskId(), recipients, event.actorId());
     }
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
@@ -265,7 +312,7 @@ public class NotificationEventListener {
                 .filter(java.util.Objects::nonNull)
                 .distinct()
                 .toList();
-        notificationService.dispatch(
+        notificationService.dispatch(NotificationType.TASK_STATUS_CHANGED,
                 "Task status changed",
                 "Task '" + event.taskTitle() + "' is now " + event.status() + ".",
                 NotificationPriority.NORMAL,
@@ -312,7 +359,7 @@ public class NotificationEventListener {
             return;
         }
         String kind = "GROUP".equalsIgnoreCase(event.conversationType()) ? "group message" : "private message";
-        notificationService.dispatch(
+        notificationService.dispatch(NotificationType.MESSAGE_RECEIVED,
                 "New message",
                 "New " + kind + " from " + event.senderEmail() + ".",
                 NotificationPriority.LOW,
@@ -334,7 +381,7 @@ public class NotificationEventListener {
         String candidate = event.candidateName() == null || event.candidateName().isBlank()
                 ? ""
                 : " (" + event.candidateName().strip() + ")";
-        notificationService.dispatchToRole(
+        notificationService.dispatchToRole(NotificationType.FINAL_EVALUATION_REQUIRED,
                 NotificationService.FINAL_EVALUATION_DEDUPE_PREFIX + event.internshipId(),
                 NotificationService.ADMIN_ROLE_CODE,
                 NotificationService.FINAL_EVALUATION_TITLE,

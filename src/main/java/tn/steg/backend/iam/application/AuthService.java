@@ -27,6 +27,7 @@ import tn.steg.backend.iam.domain.repository.UserSessionRepository;
 import tn.steg.backend.iam.application.port.out.TokenServicePort;
 import tn.steg.backend.iam.application.port.out.RateLimiterPort;
 import tn.steg.backend.audit.application.AuditService;
+import tn.steg.backend.notification.application.NotificationService;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -48,6 +49,15 @@ public class AuthService {
     private final RateLimiterPort rateLimiter;
     private final AuditService auditService;
     private final MessageSource messageSource;
+
+    /**
+     * T01/D15: the one-time welcome notification is created by the backend
+     * (never fabricated client-side) — after the forced password change on the
+     * very first change, or on the first successful login for an account that
+     * never needed one. Exactly-once per user via the WELCOME:&lt;userId&gt;
+     * dedupe key.
+     */
+    private final NotificationService notificationService;
 
     @Transactional
     public AuthResponse register(RegisterRequest request, String ipAddress) {
@@ -84,6 +94,16 @@ public class AuthService {
 
         auditService.log("USER_LOGIN", "User", user.getId(),
                 null, user.getEmail(), user.getId(), ipAddress);
+
+        // D15/BR-45: an account that never needed a forced change gets its
+        // one-time welcome on this first successful login. An account that
+        // still must change its password gets it AFTER the change instead
+        // (changePassword) — the D15 order is mandatory. Both paths are
+        // exactly-once via the WELCOME:<userId> dedupe key, so repeated
+        // logins are a cheap no-op lookup.
+        if (!Boolean.TRUE.equals(user.getMustChangePassword())) {
+            notificationService.dispatchWelcome(user.getId());
+        }
 
         return issueTokens(user, ipAddress, userAgent);
     }
@@ -262,6 +282,11 @@ public class AuthService {
         user.setMustChangePassword(false);
         userRepository.save(user);
         auditService.log("PASSWORD_CHANGED", "User", userId, null, "Password changed", userId, null);
+
+        // D15/BR-45: the welcome notification is created exactly once, and only
+        // AFTER the forced password change succeeds — never before. A duplicate
+        // call (second change, retry) collapses on the WELCOME:<userId> dedupe key.
+        notificationService.dispatchWelcome(userId);
     }
 
     private AuthResponse issueTokens(User user, String ipAddress, String userAgent) {

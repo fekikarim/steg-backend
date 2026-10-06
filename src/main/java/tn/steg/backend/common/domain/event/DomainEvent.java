@@ -27,6 +27,8 @@ public sealed interface DomainEvent
         FinalEvaluationRequiredEvent,
         DocumentVerifiedEvent,
         TaskAssignedEvent,
+        TaskUpdatedEvent,
+        TaskDeletedEvent,
         TaskStatusChangedEvent,
         JournalEntryValidatedEvent,
         NewPrivateMessageEvent,

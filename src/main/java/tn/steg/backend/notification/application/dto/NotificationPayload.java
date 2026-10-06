@@ -13,6 +13,7 @@ import java.util.UUID;
  */
 public record NotificationPayload(
         UUID notificationId,
+        String type,
         String title,
         String message,
         NotificationPriority priority,
@@ -23,6 +24,7 @@ public record NotificationPayload(
     public static NotificationPayload from(Notification notification) {
         return new NotificationPayload(
                 notification.getId(),
+                notification.getType() == null ? null : notification.getType().name(),
                 notification.getTitle(),
                 notification.getMessage(),
                 notification.getPriority(),

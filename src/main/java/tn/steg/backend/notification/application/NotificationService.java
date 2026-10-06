@@ -21,6 +21,7 @@ import tn.steg.backend.notification.domain.model.NotificationChannel;
 import tn.steg.backend.notification.domain.model.NotificationDelivery;
 import tn.steg.backend.notification.domain.model.NotificationDeliveryStatus;
 import tn.steg.backend.notification.domain.model.NotificationPriority;
+import tn.steg.backend.notification.domain.model.NotificationType;
 import tn.steg.backend.notification.domain.exception.EmailDeliveryException;
 import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.common.application.ApplicationTimeZone;
@@ -164,6 +165,76 @@ public class NotificationService {
     }
 
     /**
+     * Typed fan-out (T01/D11): the catalogue key is persisted on the row and
+     * exposed through the REST response and the live STOMP payload so clients
+     * can classify without string-matching titles. Kept as a separate
+     * overload — every existing call site keeps its exact semantics.
+     */
+    @Transactional
+    public Notification dispatch(NotificationType type, String title, String message,
+                                 NotificationPriority priority,
+                                 String relatedEntityType, UUID relatedEntityId,
+                                 Collection<UUID> recipientIds, UUID actorId) {
+        Notification notification = dispatchOnce(null, title, message, priority,
+                relatedEntityType, relatedEntityId, recipientIds, actorId);
+        if (notification.getType() == null) {
+            notification.setType(type);
+            return notificationRepository.save(notification);
+        }
+        return notification;
+    }
+
+    /**
+     * Typed + exactly-once fan-out: used when the fact itself is idempotent
+     * (dedupe key) AND carries a catalogue key (e.g. document rejection per
+     * internship + document kind).
+     */
+    @Transactional
+    public Notification dispatchOnce(NotificationType type, String dedupeKey, String title,
+                                     String message, NotificationPriority priority,
+                                     String relatedEntityType, UUID relatedEntityId,
+                                     Collection<UUID> recipientIds, UUID actorId) {
+        Notification notification = dispatchOnce(dedupeKey, title, message, priority,
+                relatedEntityType, relatedEntityId, recipientIds, actorId);
+        if (notification.getType() == null && type != null) {
+            notification.setType(type);
+            return notificationRepository.save(notification);
+        }
+        return notification;
+    }
+
+    /**
+     * D15 / BR-45 — the one-time welcome notification (ST-NOT-01).
+     *
+     * <p>Created exactly once per account, keyed {@code WELCOME:&lt;userId&gt;},
+     * and only after the FIRST successful password change (or first login for
+     * an account that never needed a forced change) — never before, per the
+     * mandatory D15 order. Concurrent double calls collapse on the DB unique
+     * {@code dedupe_key} through {@link #dispatchOnce}; an idempotency race
+     * between the check and the insert is absorbed because the loser reads the
+     * committed winner within the same transaction boundary of the caller.
+     * Absorb a true unique-violation race defensively: a lost welcome is
+     * cosmetic, a broken password change is not.
+     */
+    @Transactional
+    public Notification dispatchWelcome(UUID recipientUserId) {
+        try {
+            return dispatchOnce(NotificationType.WELCOME,
+                    "WELCOME:" + recipientUserId,
+                    "Bienvenue sur STEG intern",
+                    "Bienvenue sur votre espace de stage STEG. Retrouvez ici vos tâches, "
+                            + "votre journal, vos documents et les messages de votre encadrant.",
+                    NotificationPriority.LOW,
+                    "Internship", null,
+                    List.of(recipientUserId), recipientUserId);
+        } catch (org.springframework.dao.DataIntegrityViolationException race) {
+            log.info("Welcome notification already exists for {} — concurrent creation collapsed",
+                    recipientUserId);
+            return notificationRepository.findByDedupeKey("WELCOME:" + recipientUserId).orElse(null);
+        }
+    }
+
+    /**
      * Exactly-once dispatch for confirmations that must be sent one time per
      * business event (e.g. one application-submission email per application).
      *
@@ -232,6 +303,17 @@ public class NotificationService {
                                        NotificationPriority priority,
                                        String relatedEntityType, UUID relatedEntityId,
                                        UUID actorId) {
+        return dispatchToRole(null, dedupeKey, roleCode, title, message, priority,
+                relatedEntityType, relatedEntityId, actorId);
+    }
+
+    /** Typed variant of {@link #dispatchToRole} (T01/D11 catalogue key). */
+    @Transactional
+    public Notification dispatchToRole(NotificationType type, String dedupeKey, String roleCode,
+                                       String title, String message,
+                                       NotificationPriority priority,
+                                       String relatedEntityType, UUID relatedEntityId,
+                                       UUID actorId) {
         List<UUID> recipients = userRepository.findDistinctByAssignedRoles_Code(roleCode).stream()
                 .filter(user -> Boolean.TRUE.equals(user.getEnabled()))
                 .map(User::getId)
@@ -239,8 +321,8 @@ public class NotificationService {
         if (recipients.isEmpty()) {
             log.warn("No active user holds role {} — notification {} not delivered to anyone", roleCode, title);
         }
-        return dispatchOnce(dedupeKey, title, message, priority, relatedEntityType, relatedEntityId,
-                recipients, actorId);
+        return dispatchOnce(type, dedupeKey, title, message, priority, relatedEntityType,
+                relatedEntityId, recipients, actorId);
     }
 
     /**

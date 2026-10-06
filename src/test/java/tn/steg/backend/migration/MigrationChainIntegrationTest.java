@@ -95,22 +95,23 @@ class MigrationChainIntegrationTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("empty database migrates cleanly to V53 with every slice table present")
+    @DisplayName("empty database migrates cleanly to V55 with every slice table present")
     void emptyDatabaseMigratesCleanlyToLatest() throws Exception {
         var result = flywayTo(POSTGRES, null).migrate();
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(53);
+        assertThat(result.migrationsExecuted).isEqualTo(55);
 
         try (Connection c = driver(POSTGRES)) {
             // Latest version marker.
             assertThat(queryString(c,
                     "SELECT version FROM flyway_schema_history WHERE success = true ORDER BY installed_rank DESC LIMIT 1"))
-                    .isEqualTo("53");
+                    .isEqualTo("55");
             // One table per post-V33 slice: drafts (V48), chatbot history (V49),
             // certificate versions (V46), validation runs/decisions (V45).
             for (String table : java.util.List.of("ai_task_drafts", "ai_chat_messages",
                     "certificate_versions", "validation_verification_runs", "validation_decisions",
-                    "audit_logs", "candidates", "internships", "internship_applications")) {
+                    "audit_logs", "candidates", "internships", "internship_applications",
+                    "task_categories", "task_category_apply_batches", "task_category_apply_items")) {
                 assertThat(queryInt(c,
                         "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?", table))
                         .as("table %s exists", table).isEqualTo(1);
@@ -125,6 +126,16 @@ class MigrationChainIntegrationTest {
                     .isEqualTo(2);
             assertThat(queryInt(c,
                     "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'internships' AND column_name = 'supervisor_user_id'"))
+                    .isEqualTo(1);
+            // Notifications catalogue key (V54, T01): nullable so every
+            // pre-V54 row keeps working, present on the slice table itself.
+            assertThat(queryInt(c,
+                    "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'notifications' AND column_name = 'type'"))
+                    .isEqualTo(1);
+            // Student task categories (V55, T03): the link is nullable so
+            // every pre-V55 task reads as unclassified.
+            assertThat(queryInt(c,
+                    "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'task_category_id'"))
                     .isEqualTo(1);
             // Explicit-model default (V43): no internship is ever born legacy.
             assertThat(queryString(c,

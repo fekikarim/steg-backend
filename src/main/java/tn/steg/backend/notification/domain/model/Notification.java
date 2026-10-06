@@ -19,6 +19,15 @@ import java.util.UUID;
 @Table(name = "notifications")
 public class Notification extends BaseEntity {
 
+    /**
+     * Stable catalogue key (D11/BR-44, V54). Nullable: rows created before
+     * V54 carry no type and every client must render them generically.
+     * Never renamed once shipped — stored keys must keep their meaning.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "type", length = 60)
+    private NotificationType type;
+
     @Column(name = "title", nullable = false)
     private String title;
 

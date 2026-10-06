@@ -45,13 +45,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * specification, the annotations the implementation, and the tripwire test
  * fails if they ever drift apart).
  *
- * <p>Three tables partition every Spring MVC endpoint (196 mappings):
+ * <p>Three tables partition every Spring MVC endpoint (205 mappings):
  * <ul>
  *   <li>{@link #ADMIN_ONLY} (70) — §3.3 reserves the capability to Admin
  *       (applications/certificate/finance/validation/supervisor/account
  *       management, audit, org reference data, admin dashboards/reports).
  *       Probed: Supervisor → 403, anonymous → 401.</li>
- *   <li>{@link #SUPERVISOR_ALLOWED} (117) — §3.3 grants the capability to
+ *   <li>{@link #SUPERVISOR_ALLOWED} (126) — §3.3 grants the capability to
  *       Supervisor (own-scope candidates/tasks/drafts/chatbot/notifications/
  *       conversations, shared candidate/application surfaces, scoped reads).
  *       Row-level 404 scoping inside these endpoints is proven per module
@@ -242,6 +242,22 @@ class AdminOnlyEndpointSecurityTest {
             "POST /api/internships/tasks/drafts/{id}/revise",
             "DELETE /api/internships/tasks/drafts/{id}",
             "POST /api/internships/tasks/drafts/bulk-add",
+            // T03 student task classification (ST-TASK-03/04/05, D5/D5b):
+            // INTERN-only participant surface — a supervisor or admin token
+            // is refused at method level (403), proven per endpoint by
+            // TaskCategoryIntegrationTest.staffIsForbidden; cross-student
+            // ids are 404 inside the service. Listed here (not ADMIN_ONLY)
+            // because no staff capability is involved, following the
+            // candidates/me precedent above.
+            "GET /api/internships/{id}/task-categories",
+            "POST /api/internships/{id}/task-categories",
+            "PUT /api/internships/task-categories/{categoryId}",
+            "PUT /api/internships/task-categories/order",
+            "DELETE /api/internships/task-categories/{categoryId}",
+            "PUT /api/internships/tasks/{taskId}/category",
+            "POST /api/internships/{id}/task-categories/suggest",
+            "POST /api/internships/{id}/task-categories/apply",
+            "POST /api/internships/task-categories/apply-batches/{batchId}/undo",
             // §5.2 scoped document surfaces (verify/attach stay admin-only).
             "POST /api/documents",
             "GET /api/documents/{id}",

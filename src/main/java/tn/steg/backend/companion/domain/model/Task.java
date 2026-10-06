@@ -63,6 +63,15 @@ public class Task extends BaseEntity {
     @Column(name = "reviewed_at")
     private Instant reviewedAt;
 
+    /**
+     * T03 personal classification link (ST-TASK-05): nullable, owned by the
+     * student's own {@link TaskCategory}. Independent of {@link #status} —
+     * assigning or clearing it must never change the workflow status (BR-19).
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "task_category_id")
+    private TaskCategory taskCategory;
+
     public Task(Internship internship, User createdBy, String title, String description) {
         this.internship = internship;
         this.createdBy = createdBy;

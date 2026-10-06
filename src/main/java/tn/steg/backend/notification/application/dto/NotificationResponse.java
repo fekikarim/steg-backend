@@ -3,6 +3,7 @@ package tn.steg.backend.notification.application.dto;
 import tn.steg.backend.notification.domain.model.Notification;
 import tn.steg.backend.notification.domain.model.NotificationDelivery;
 import tn.steg.backend.notification.domain.model.NotificationPriority;
+import tn.steg.backend.notification.domain.model.NotificationType;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -13,6 +14,7 @@ import java.util.UUID;
  */
 public record NotificationResponse(
         UUID id,
+        String type,
         String title,
         String message,
         NotificationPriority priority,
@@ -26,6 +28,7 @@ public record NotificationResponse(
         boolean read = inAppDelivery.getReadAt() != null;
         return new NotificationResponse(
                 notification.getId(),
+                notification.getType() == null ? null : notification.getType().name(),
                 notification.getTitle(),
                 notification.getMessage(),
                 notification.getPriority(),

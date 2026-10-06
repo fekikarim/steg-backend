@@ -10,8 +10,11 @@ import tn.steg.backend.common.domain.event.JournalEntryValidatedEvent;
 import tn.steg.backend.common.domain.event.NewPrivateMessageEvent;
 import tn.steg.backend.common.domain.event.PaymentApprovedEvent;
 import tn.steg.backend.common.domain.event.TaskAssignedEvent;
+import tn.steg.backend.common.domain.event.TaskDeletedEvent;
+import tn.steg.backend.common.domain.event.TaskUpdatedEvent;
 import tn.steg.backend.notification.domain.model.Notification;
 import tn.steg.backend.notification.domain.model.NotificationPriority;
+import tn.steg.backend.notification.domain.model.NotificationType;
 
 import java.math.BigDecimal;
 import java.util.Collection;
@@ -22,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -63,8 +67,21 @@ class NotificationEventListenerNullSafetyTest {
                 UUID.randomUUID(), "Rédiger le cahier", UUID.randomUUID(), null, UUID.randomUUID())))
                 .doesNotThrowAnyException();
         ArgumentCaptor<Collection<UUID>> recipients = ArgumentCaptor.forClass(Collection.class);
-        verify(notificationService).dispatch(anyString(), anyString(), any(), any(), any(), recipients.capture(), any());
+        verify(notificationService).dispatch(eq(NotificationType.TASK_ASSIGNED),
+                anyString(), anyString(), any(), any(), any(), recipients.capture(), any());
         assertThat(recipients.getValue()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("task edit/delete events with no resolved users fan out to nobody")
+    void taskUpdatedAndDeletedWithoutUsersNotifyNoOne() {
+        assertThatCode(() -> listener.onTaskUpdated(new TaskUpdatedEvent(
+                UUID.randomUUID(), UUID.randomUUID(), "Cahier", null, null, UUID.randomUUID())))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> listener.onTaskDeleted(new TaskDeletedEvent(
+                UUID.randomUUID(), UUID.randomUUID(), "Cahier", null, null, UUID.randomUUID())))
+                .doesNotThrowAnyException();
+        verifyNoInteractions(notificationService);
     }
 
     @Test
@@ -86,8 +103,10 @@ class NotificationEventListenerNullSafetyTest {
                 UUID.randomUUID(), "APP-NS-1", null, UUID.randomUUID())))
                 .doesNotThrowAnyException();
         // dispatchOnce for the candidate (empty recipients) + dispatchToRole for Admins.
-        verify(notificationService).dispatchOnce(anyString(), anyString(), anyString(), any(), any(), any(), any(), any());
-        verify(notificationService).dispatchToRole(anyString(), anyString(), anyString(), anyString(), any(), any(), any(), any());
+        verify(notificationService).dispatchOnce(eq(NotificationType.APPLICATION_SUBMITTED),
+                anyString(), anyString(), anyString(), any(), any(), any(), any(), any());
+        verify(notificationService).dispatchToRole(eq(NotificationType.APPLICATION_SUBMITTED),
+                anyString(), anyString(), anyString(), anyString(), any(), any(), any(), any());
     }
 
     @Test
