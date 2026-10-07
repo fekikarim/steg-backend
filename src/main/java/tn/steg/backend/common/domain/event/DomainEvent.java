@@ -22,6 +22,7 @@ public sealed interface DomainEvent
         InternshipAssignedEvent,
         InternshipReportSubmittedEvent,
         DocumentRejectedEvent,
+        SupervisorDocumentRejectedEvent,
         InternshipCompletedEvent,
         InternshipStatusChangedEvent,
         FinalEvaluationRequiredEvent,

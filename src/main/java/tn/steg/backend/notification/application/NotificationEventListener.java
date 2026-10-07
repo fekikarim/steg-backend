@@ -11,6 +11,7 @@ import tn.steg.backend.common.domain.event.ApplicationRejectedEvent;
 import tn.steg.backend.common.domain.event.ApplicationResubmittedEvent;
 import tn.steg.backend.common.domain.event.ApplicationSubmittedEvent;
 import tn.steg.backend.common.domain.event.DocumentRejectedEvent;
+import tn.steg.backend.common.domain.event.SupervisorDocumentRejectedEvent;
 import tn.steg.backend.common.domain.event.DocumentVerifiedEvent;
 import tn.steg.backend.common.domain.event.FinalEvaluationRequiredEvent;
 import tn.steg.backend.common.domain.event.InternshipAssignedEvent;
@@ -241,6 +242,44 @@ public class NotificationEventListener {
                 NotificationPriority.HIGH,
                 "Internship", event.internshipId(),
                 listOf(event.candidateUserId()), event.actorId());
+    }
+
+    /**
+     * T10/ST-VAL-04 — the intern learns WHAT to fix when the supervisor
+     * rejects a validation document. Reuses the existing
+     * {@code DOCUMENT_REJECTED} catalogue key (no new pipeline, no new type):
+     * the mobile center already renders and deep-links it. Plain dispatch,
+     * not deduped — every rejection is transition-guarded, so a duplicate
+     * publish is impossible while a reject → resubmit → reject cycle
+     * notifies again. The supervisor is never named (P44 pattern: the
+     * reason travels, the reviewer identity does not).
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onSupervisorDocumentRejected(SupervisorDocumentRejectedEvent event) {
+        if (event.internUserId() == null) {
+            return;
+        }
+        String kind = event.documentKind() == null ? "document"
+                : event.documentKind().toLowerCase().replace('_', ' ');
+        String title = event.documentTitle() == null || event.documentTitle().isBlank()
+                ? "Document refused by your supervisor — action required"
+                : "'" + event.documentTitle() + "' refused by your supervisor — action required";
+        String reason = event.reason() == null || event.reason().isBlank()
+                ? "Your supervisor asked for a corrected version. Open the document to resubmit."
+                : "Your " + kind + " for internship " + event.internshipReference()
+                + " was refused by your supervisor.\n\nReason: " + event.reason().strip()
+                + "\n\nPlease submit a corrected version.";
+        String entityType = switch (event.documentKind()) {
+            case "JOURNAL_ENTRY" -> "JournalEntry";
+            case "LOGBOOK" -> "Logbook";
+            default -> "Deliverable";
+        };
+        notificationService.dispatch(NotificationType.DOCUMENT_REJECTED,
+                title,
+                reason,
+                NotificationPriority.HIGH,
+                entityType, event.documentId(),
+                listOf(event.internUserId()), event.actorId());
     }
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)

@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import tn.steg.backend.common.domain.event.InternshipReportSubmittedEvent;
 import tn.steg.backend.common.domain.event.JournalEntryValidatedEvent;
+import tn.steg.backend.common.domain.event.SupervisorDocumentRejectedEvent;
 import tn.steg.backend.common.domain.event.TaskAssignedEvent;
 import tn.steg.backend.common.domain.event.TaskDeletedEvent;
 import tn.steg.backend.common.domain.event.TaskStatusChangedEvent;
@@ -639,10 +640,22 @@ public class CompanionService {
         entry.setValidatedAt(Instant.now());
         entry = journalEntryRepository.save(entry);
         log.info("Journal entry rejected: id={}, rejectedBy={}", entry.getId(), supervisor != null ? supervisor.getId() : null);
+        String rejectionReason = request != null ? request.comment() : null;
         auditService.log("JOURNAL_ENTRY_REJECTED", "JournalEntry", entry.getId(),
                 Map.of("status", JournalEntryStatus.SUBMITTED),
-                reviewAudit(JournalEntryStatus.REJECTED, request.comment(), supervisor),
+                reviewAudit(JournalEntryStatus.REJECTED, rejectionReason, supervisor),
                 actor.getId(), null);
+
+        // T10/ST-VAL-04: the reason travels in the notification itself — the
+        // audit row is Admin-only, so without this the student would see
+        // REJECTED with no explanation of what to fix.
+        eventPublisher.publishEvent(new SupervisorDocumentRejectedEvent(
+                entry.getJournal().getInternship().getId(),
+                entry.getJournal().getInternship().getReference(),
+                "JOURNAL_ENTRY", entry.getId(), entry.getTitle(),
+                rejectionReason,
+                entry.getAuthor() != null ? entry.getAuthor().getId() : null,
+                actor.getId()));
         return JournalEntryResponse.from(entry);
     }
 
@@ -808,9 +821,22 @@ public class CompanionService {
         deliverable.setValidatedAt(Instant.now());
         deliverable = deliverableRepository.save(deliverable);
         log.info("Deliverable rejected: id={}, rejectedBy={}", deliverableId, supervisor != null ? supervisor.getId() : null);
+        String deliverableRejectionReason = request != null ? request.comment() : null;
         auditService.log("DELIVERABLE_REJECTED", "Deliverable", deliverableId,
                 Map.of("status", DeliverableStatus.SUBMITTED),
-                reviewAudit(DeliverableStatus.REJECTED, request.comment(), supervisor), actor.getId(), null);
+                reviewAudit(DeliverableStatus.REJECTED, deliverableRejectionReason, supervisor), actor.getId(), null);
+
+        // T10/ST-VAL-04: same reason-in-notification rule as journal entries.
+        var rejectedInternship = deliverable.getInternship();
+        eventPublisher.publishEvent(new SupervisorDocumentRejectedEvent(
+                rejectedInternship.getId(),
+                rejectedInternship.getReference(),
+                "DELIVERABLE", deliverableId, deliverable.getTitle(),
+                deliverableRejectionReason,
+                rejectedInternship.getCandidate() != null
+                        && rejectedInternship.getCandidate().getUser() != null
+                        ? rejectedInternship.getCandidate().getUser().getId() : null,
+                actor.getId()));
         return toDeliverableResponse(deliverable);
     }
 

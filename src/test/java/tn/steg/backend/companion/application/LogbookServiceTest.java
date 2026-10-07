@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.candidate.domain.model.Candidate;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
@@ -69,6 +70,7 @@ class LogbookServiceTest {
     @Mock private InternshipAssignmentRepository assignmentRepository;
     @Mock private UserRepository userRepository;
     @Mock private AuditService auditService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     private UserPrincipal internPrincipal;
     private UserPrincipal supervisorPrincipal;
@@ -77,7 +79,7 @@ class LogbookServiceTest {
     @BeforeEach
     void setUp() {
         service = new LogbookService(logbookRepository, internshipRepository,
-                assignmentRepository, userRepository, auditService);
+                assignmentRepository, userRepository, auditService, eventPublisher);
 
         internPrincipal = new UserPrincipal(INTERN_USER_ID, "intern@steg.tn", List.of("ROLE_INTERN"));
         supervisorPrincipal = new UserPrincipal(SUPERVISOR_USER_ID, "sup@steg.tn", List.of("ROLE_SUPERVISOR"));

@@ -9,6 +9,7 @@ import tn.steg.backend.common.domain.event.InternshipAssignedEvent;
 import tn.steg.backend.common.domain.event.JournalEntryValidatedEvent;
 import tn.steg.backend.common.domain.event.NewPrivateMessageEvent;
 import tn.steg.backend.common.domain.event.PaymentApprovedEvent;
+import tn.steg.backend.common.domain.event.SupervisorDocumentRejectedEvent;
 import tn.steg.backend.common.domain.event.TaskAssignedEvent;
 import tn.steg.backend.common.domain.event.TaskDeletedEvent;
 import tn.steg.backend.common.domain.event.TaskUpdatedEvent;
@@ -129,6 +130,17 @@ class NotificationEventListenerNullSafetyTest {
         ArgumentCaptor<Collection<UUID>> recipients = ArgumentCaptor.forClass(Collection.class);
         verify(notificationService).dispatch(anyString(), anyString(), any(), any(), any(), recipients.capture(), any());
         assertThat(recipients.getValue()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("supervisor rejection without an intern user: empty fan-out, never NPE")
+    void supervisorRejectWithoutInternUserNotifiesNoOne() {
+        assertThatCode(() -> listener.onSupervisorDocumentRejected(new SupervisorDocumentRejectedEvent(
+                UUID.randomUUID(), "INT-2026-00001",
+                "DELIVERABLE", UUID.randomUUID(), "Report",
+                "Add the header", null, UUID.randomUUID())))
+                .doesNotThrowAnyException();
+        verifyNoInteractions(notificationService);
     }
 
     @Test

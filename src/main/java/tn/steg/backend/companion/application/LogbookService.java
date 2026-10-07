@@ -4,10 +4,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.context.ApplicationEventPublisher;
 import tn.steg.backend.audit.application.AuditService;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.common.domain.event.SupervisorDocumentRejectedEvent;
 import tn.steg.backend.companion.domain.model.Logbook;
 import tn.steg.backend.companion.domain.model.LogbookStatus;
 import tn.steg.backend.companion.domain.repository.LogbookRepository;
@@ -41,6 +43,7 @@ public class LogbookService {
     private final InternshipAssignmentRepository assignmentRepository;
     private final UserRepository userRepository;
     private final AuditService auditService;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * Intern submits their edited logbook draft for supervisor validation.
@@ -152,6 +155,19 @@ public class LogbookService {
         auditService.log("LOGBOOK_REJECTED", "Logbook", logbookId, null,
                 Map.of("reason", reason),
                 actor.getId(), null);
+
+        // T10/ST-VAL-04: the on-entity reason is only read on next open, so
+        // the rejection also pushes a notification carrying what to fix.
+        var logbookInternship = logbook.getInternship();
+        eventPublisher.publishEvent(new SupervisorDocumentRejectedEvent(
+                logbookInternship.getId(),
+                logbookInternship.getReference(),
+                "LOGBOOK", logbookId, null,
+                reason.trim(),
+                logbookInternship.getCandidate() != null
+                        && logbookInternship.getCandidate().getUser() != null
+                        ? logbookInternship.getCandidate().getUser().getId() : null,
+                actor.getId()));
 
         log.info("Logbook rejected: {}", logbookId);
         return logbook;
