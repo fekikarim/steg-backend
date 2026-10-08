@@ -80,7 +80,13 @@ class OpenApiContractTest {
                 "/api/reports/applications-by-status", "/api/reports/payment-totals",
                 "/api/ai/assistant/query", "/api/ai/applications/{id}/analyze",
                 "/api/community/posts", "/api/community/posts/{postId}",
-                "/api/community/posts/{postId}/comments"
+                "/api/community/posts/{postId}/comments",
+                "/api/internships/supervised",
+                "/api/internships/{id}/summary",
+                // T10 B7/B8: submission window read + explicit document-kind registration.
+                "/api/internships/{id}/submission-window",
+                "/api/internships/deliverables/{deliverableId}/document-kind",
+                "/api/supervision/document-preparation"
         }) {
             assertThat(paths.has(expected)).as("missing expected path %s", expected).isTrue();
         }

@@ -40,7 +40,9 @@ public enum NotificationType {
     /** T08/D7: a moderator removed your community post (reason in message). */
     COMMUNITY_POST_REMOVED,
     /** T08/D7: a moderator removed your community comment (reason in message). */
-    COMMUNITY_COMMENT_REMOVED;
+    COMMUNITY_COMMENT_REMOVED,
+    /** T14/D14: a supervisor asks his student to prepare validation documents. */
+    DOCUMENTS_PREPARATION_REQUESTED;
 
     /**
      * Tolerant parse for the wire: unknown or absent values become

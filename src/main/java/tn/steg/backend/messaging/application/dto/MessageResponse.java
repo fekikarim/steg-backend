@@ -24,12 +24,20 @@ public record MessageResponse(
         Instant deletedAt,
         List<AttachmentResponse> attachments
 ) {
+    /**
+     * T10/SU-VAL-01: when the attachment came from one of the internship's
+     * documents, {@code sourceDeliverableId} carries the deliverable and
+     * {@code sourceDocumentKind} its explicit kind (null when unmarked). Both
+     * are null for ordinary chat files.
+     */
     public record AttachmentResponse(
             UUID id,
             UUID fileAssetId,
             String fileName,
             String mimeType,
-            Long size
+            Long size,
+            UUID sourceDeliverableId,
+            String sourceDocumentKind
     ) {}
 
     public static final String REDACTED_CONTENT = "[message deleted]";

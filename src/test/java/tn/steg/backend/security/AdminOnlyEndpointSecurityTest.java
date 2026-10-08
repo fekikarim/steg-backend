@@ -45,13 +45,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * specification, the annotations the implementation, and the tripwire test
  * fails if they ever drift apart).
  *
- * <p>Three tables partition every Spring MVC endpoint (220 mappings):
+ * <p>Three tables partition every Spring MVC endpoint (222 mappings):
  * <ul>
  *   <li>{@link #ADMIN_ONLY} (70) — §3.3 reserves the capability to Admin
  *       (applications/certificate/finance/validation/supervisor/account
  *       management, audit, org reference data, admin dashboards/reports).
  *       Probed: Supervisor → 403, anonymous → 401.</li>
- *   <li>{@link #SUPERVISOR_ALLOWED} (141) — §3.3 grants the capability to
+   *   <li>{@link #SUPERVISOR_ALLOWED} (146) — §3.3 grants the capability to
  *       Supervisor (own-scope candidates/tasks/drafts/chatbot/notifications/
  *       conversations, shared candidate/application surfaces, scoped reads,
  *       student community incl. staff moderation).
@@ -221,6 +221,14 @@ class AdminOnlyEndpointSecurityTest {
             "POST /api/internships/journal/entries/{entryId}/submit",
             "POST /api/internships/journal/entries/{entryId}/validate",
             "POST /api/internships/journal/entries/{entryId}/reject",
+            // T09/B5+B6 journal document: eligibility is participant-scoped,
+            // generation is the owning intern's own action (a supervisor token
+            // is refused at method level; foreign ids are 404 inside the
+            // service, never 403) — proven by JournalGenerationFromTasksTest
+            // and JournalEligibilityTest.
+            "GET /api/internships/{id}/journal-eligibility",
+            "POST /api/internships/{id}/journal/generate",
+            "POST /api/internships/{id}/journal/generate-from-text",
             "GET /api/internships/{id}/deliverables",
             "GET /api/internships/deliverables/{deliverableId}",
             "POST /api/internships/{id}/deliverables",
@@ -230,6 +238,11 @@ class AdminOnlyEndpointSecurityTest {
             "POST /api/internships/deliverables/{deliverableId}/validate",
             "POST /api/internships/deliverables/{deliverableId}/reject",
             "GET /api/internships/deliverables/{deliverableId}/download",
+            // T10 B7/B8/SU-VAL-01: submission-window read is participant+supervisor
+            // scoped (participant of the internship); document-kind registration is
+            // supervisor+admin (isSupervisorOf), row-level 404 scoping inside.
+            "GET /api/internships/{id}/submission-window",
+            "POST /api/internships/deliverables/{deliverableId}/document-kind",
             // §3.3 logbook participant/supervisor surface (official is admin-only).
             "POST /api/internships/{internshipId}/logbook/submit",
             "POST /api/internships/{internshipId}/logbook/{logbookId}/validate",
@@ -294,7 +307,11 @@ class AdminOnlyEndpointSecurityTest {
             "PUT /api/users/me/locale",
             // §3.3 scoped internship reads.
             "GET /api/internships",
+            "GET /api/internships/supervised",
             "GET /api/internships/{id}",
+            "GET /api/internships/{id}/summary",
+            // T14/D14: supervisor self-service notify on own students.
+            "POST /api/supervision/document-preparation",
             "GET /api/internships/{id}/assignments",
             "GET /api/internships/{id}/classification",
             // §8.1 own notifications; §3.3 own conversations.

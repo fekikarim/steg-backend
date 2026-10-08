@@ -2,6 +2,7 @@ package tn.steg.backend.companion.application.dto;
 
 import tn.steg.backend.companion.domain.model.Deliverable;
 import tn.steg.backend.companion.domain.model.DeliverableStatus;
+import tn.steg.backend.internship.domain.model.ValidationDocumentType;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -14,6 +15,7 @@ public record DeliverableResponse(
         String title,
         String description,
         DeliverableStatus status,
+        ValidationDocumentType documentKind,
         Integer currentVersion,
         DeliverableVersionResponse latestVersion,
         Instant submittedAt,
@@ -36,6 +38,7 @@ public record DeliverableResponse(
                 deliverable.getTitle(),
                 deliverable.getDescription(),
                 deliverable.getStatus(),
+                deliverable.getDocumentKind(),
                 deliverable.getCurrentVersion(),
                 latestVersion,
                 deliverable.getSubmittedAt(),

@@ -13,6 +13,8 @@ import tn.steg.backend.common.domain.model.UserPrincipal;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.internship.application.InternshipLifecycleService;
 import tn.steg.backend.internship.application.InternshipService;
+import tn.steg.backend.internship.application.InternshipSummaryService;
+import tn.steg.backend.internship.application.SupervisedInternshipService;
 import tn.steg.backend.internship.application.dto.*;
 
 import java.util.List;
@@ -26,6 +28,8 @@ public class InternshipController {
 
     private final InternshipService internshipService;
     private final InternshipLifecycleService internshipLifecycleService;
+    private final SupervisedInternshipService supervisedInternshipService;
+    private final InternshipSummaryService internshipSummaryService;
 
     // -------------------------------------------------------------------------
     // Querying
@@ -37,6 +41,30 @@ public class InternshipController {
     public ResponseEntity<List<InternshipResponse>> listInternships(
             @AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(internshipService.listInternships(principal));
+    }
+
+    // T12/B2: the caller's own supervised internships with server-aggregated
+    // counts (D1b/BR-03). Unlike GET /api/internships — global for ADMIN —
+    // this is own-scope for every staff caller, ADMIN included. The literal
+    // path wins over /{id} (same convention as /manage elsewhere).
+    @PreAuthorize("@authz.hasAnyRole('ADMIN', 'SUPERVISOR')")
+    @GetMapping("/supervised")
+    @Operation(summary = "List my supervised internships with workload counts (own scope, staff only)")
+    public ResponseEntity<List<SupervisedInternshipResponse>> listSupervised(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(supervisedInternshipService.supervisedInternships(principal));
+    }
+
+    // T13/B13: one-call student home snapshot (same DTOs and service calls
+    // as the lists, so numbers cannot drift). Intern-scoped: another
+    // student's summary is 403/404, never leaked.
+    @PreAuthorize("hasRole('ADMIN') or @authz.isInternOf(#id)")
+    @Operation(summary = "Student home summary for one internship (own internship only)")
+    @GetMapping("/{id}/summary")
+    public ResponseEntity<InternshipSummaryResponse> internshipSummary(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(internshipSummaryService.summary(id, principal));
     }
 
     // A14 IDOR fix: candidates may read ONLY their own internship. The scope is

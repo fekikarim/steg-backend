@@ -337,8 +337,15 @@ public class InternshipValidationService {
     }
 
     /**
-     * Document resolution (audit assumption #18): the REPORT is the oldest
-     * submitted deliverable (the intern sends the report first, §4), the
+     * Document resolution. T10/B8 (D4b) first: a deliverable carrying an
+     * explicit {@code documentKind} (set by the student at upload or by the
+     * supervisor's first-level registration, SU-VAL-01) is THE document of that
+     * type. Each type resolves independently, so marking only one document
+     * leaves the other on the documented order fallback instead of breaking
+     * the queue.
+     *
+     * <p>Fallback (audit assumption #18) for unmarked rows: the REPORT is the
+     * oldest submitted deliverable (the intern sends the report first, §4), the
      * JOURNAL is the newest submitted deliverable other than the report — so a
      * resubmitted journal after a REJECTED decision becomes the journal
      * document without ever swapping the report. A lone deliverable leaves the
@@ -357,16 +364,36 @@ public class InternshipValidationService {
         if (submitted.isEmpty()) {
             return List.of();
         }
+        // T10/B8 (D4b): an explicit kind beats the order inference. The list is
+        // newest-first, so the newest marked document of each type wins.
+        Deliverable explicitReport = submitted.stream()
+                .filter(d -> d.getDocumentKind() == ValidationDocumentType.REPORT)
+                .findFirst().orElse(null);
+        Deliverable explicitJournal = submitted.stream()
+                .filter(d -> d.getDocumentKind() == ValidationDocumentType.JOURNAL)
+                .findFirst().orElse(null);
+
+        // REPORT: explicit, else the oldest submitted document that is not the
+        // explicit journal (assumption #18 fallback).
+        Deliverable report = explicitReport != null ? explicitReport
+                : submitted.stream()
+                        .filter(d -> explicitJournal == null || !d.getId().equals(explicitJournal.getId()))
+                        .reduce((older, newer) -> newer).orElse(null);
+
         List<ResolvedDocument> out = new ArrayList<>();
-        // Oldest submitted first: index 0 is the report.
-        Deliverable report = submitted.get(submitted.size() - 1);
-        resolveOne(ValidationDocumentType.REPORT, report).ifPresent(out::add);
-        // Newest submitted other than the report is the journal.
-        submitted.stream()
-                .filter(d -> !d.getId().equals(report.getId()))
-                .findFirst()
-                .flatMap(journal -> resolveOne(ValidationDocumentType.JOURNAL, journal))
-                .ifPresent(out::add);
+        if (report != null) {
+            resolveOne(ValidationDocumentType.REPORT, report).ifPresent(out::add);
+        }
+
+        // JOURNAL: explicit, else the newest submitted document other than the
+        // chosen report (assumption #18 fallback).
+        Deliverable journal = explicitJournal != null ? explicitJournal
+                : submitted.stream()
+                        .filter(d -> report == null || !d.getId().equals(report.getId()))
+                        .findFirst().orElse(null);
+        if (journal != null) {
+            resolveOne(ValidationDocumentType.JOURNAL, journal).ifPresent(out::add);
+        }
         return List.copyOf(out);
     }
 

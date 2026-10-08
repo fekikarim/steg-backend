@@ -215,9 +215,10 @@ public class CompanionController {
             @RequestParam("title") String title,
             @RequestParam(value = "description", required = false) String description,
             @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "documentKind", required = false) String documentKind,
             @AuthenticationPrincipal UserPrincipal actor) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(companionService.createDeliverable(id, title, description, file, actor));
+                .body(companionService.createDeliverable(id, title, description, file, documentKind, actor));
     }
 
     @PostMapping(value = "/deliverables/{deliverableId}/versions", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -245,6 +246,28 @@ public class CompanionController {
             @PathVariable UUID deliverableId,
             @AuthenticationPrincipal UserPrincipal actor) {
         return ResponseEntity.ok(companionService.submitDeliverable(deliverableId, actor));
+    }
+
+    @GetMapping("/{id}/submission-window")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isParticipantOf(#id)")
+    @Operation(summary = "Final-week journal/report submission window (BR-22, participant)",
+            description = "Server-computed in the application time zone: opens on end − 7 days, "
+                    + "closes on end; late submissions are refused (no override).")
+    public ResponseEntity<SubmissionWindowResponse> submissionWindow(@PathVariable UUID id) {
+        return ResponseEntity.ok(companionService.submissionWindow(id));
+    }
+
+    @PostMapping("/deliverables/{deliverableId}/document-kind")
+    @PreAuthorize("hasRole('ADMIN') or @authz.isSupervisorOf(#deliverableId)")
+    @Operation(summary = "Register one document as the internship's journal or report (first-level review)",
+            description = "T10/SU-VAL-01: the supervisor's set-as-journal/report action after receiving "
+                    + "a document. One document per kind; a validated document keeps its kind.")
+    public ResponseEntity<DeliverableResponse> registerDocumentKind(
+            @PathVariable UUID deliverableId,
+            @RequestBody RegisterDocumentKindRequest request,
+            @AuthenticationPrincipal UserPrincipal actor) {
+        return ResponseEntity.ok(companionService.registerDocumentKind(deliverableId,
+                request != null ? request.documentKind() : null, actor));
     }
 
     @PostMapping("/deliverables/{deliverableId}/validate")

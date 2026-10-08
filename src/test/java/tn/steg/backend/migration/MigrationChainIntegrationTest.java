@@ -95,17 +95,17 @@ class MigrationChainIntegrationTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("empty database migrates cleanly to V57 with every slice table present")
+    @DisplayName("empty database migrates cleanly to V58 with every slice table present")
     void emptyDatabaseMigratesCleanlyToLatest() throws Exception {
         var result = flywayTo(POSTGRES, null).migrate();
         assertThat(result.success).isTrue();
-        assertThat(result.migrationsExecuted).isEqualTo(57);
+        assertThat(result.migrationsExecuted).isEqualTo(58);
 
         try (Connection c = driver(POSTGRES)) {
             // Latest version marker.
             assertThat(queryString(c,
                     "SELECT version FROM flyway_schema_history WHERE success = true ORDER BY installed_rank DESC LIMIT 1"))
-                    .isEqualTo("57");
+                    .isEqualTo("58");
             // One table per post-V33 slice: drafts (V48), chatbot history (V49),
             // certificate versions (V46), validation runs/decisions (V45),
             // community posts/comments/reports/mutes (V57).

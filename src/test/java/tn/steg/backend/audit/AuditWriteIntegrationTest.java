@@ -130,8 +130,9 @@ class AuditWriteIntegrationTest {
     void deliverableValidationIsAudited() throws Exception {
         MockMultipartFile file = new MockMultipartFile("file", "rapport.pdf",
                 "application/pdf", "%PDF-1.4 audit deliverable".getBytes(StandardCharsets.UTF_8));
+        // T10/B8: documentKind is optional — null keeps the pre-existing lifecycle.
         var deliverableId = companionService.createDeliverable(internshipId, "Rapport final", "Audit PDF",
-                file, candidateActor).id();
+                file, null, candidateActor).id();
         companionService.submitDeliverable(deliverableId, candidateActor);
         companionService.validateDeliverable(deliverableId, new ValidationRequest("Validated"), supervisorActor);
 

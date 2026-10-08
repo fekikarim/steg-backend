@@ -67,10 +67,13 @@ class MessagingContractTest {
     @Test
     @DisplayName("Message broadcast payload has the exact contracted fields")
     void messagePayloadContract() throws Exception {
+        // T10/SU-VAL-01: attachments linked to an internship document carry
+        // sourceDeliverableId + sourceDocumentKind (additive, null-serialized).
         MessageResponse.AttachmentResponse attachment = new MessageResponse.AttachmentResponse(
                 UUID.fromString("44444444-4444-4444-4444-444444444444"),
                 UUID.fromString("55555555-5555-5555-5555-555555555555"),
-                "report.pdf", "application/pdf", 1234L);
+                "report.pdf", "application/pdf", 1234L,
+                UUID.fromString("66666666-6666-4666-8666-666666666666"), "REPORT");
         JsonNode node = objectMapper.valueToTree(MessageResponse.from(sampleMessage(MessageStatus.READ), List.of(attachment)));
 
         assertThat(keys(node)).containsExactly("attachments", "content", "conversationId", "deletedAt",
@@ -79,7 +82,8 @@ class MessagingContractTest {
         assertThat(node.get("status").asText()).isEqualTo("READ");
         assertThat(node.get("sequenceNumber").asLong()).isEqualTo(7L);
         assertThat(keys(node.get("attachments").get(0)))
-                .containsExactly("fileAssetId", "fileName", "id", "mimeType", "size");
+                .containsExactly("fileAssetId", "fileName", "id", "mimeType", "size",
+                        "sourceDeliverableId", "sourceDocumentKind");
     }
 
     @Test
@@ -90,7 +94,8 @@ class MessagingContractTest {
         message.setStatus(MessageStatus.DELETED);
 
         JsonNode node = objectMapper.valueToTree(MessageResponse.from(message, List.of(
-                new MessageResponse.AttachmentResponse(UUID.randomUUID(), UUID.randomUUID(), "x.pdf", "application/pdf", 1L))));
+                new MessageResponse.AttachmentResponse(UUID.randomUUID(), UUID.randomUUID(), "x.pdf",
+                        "application/pdf", 1L, null, null))));
 
         assertThat(node.get("content").asText()).isEqualTo("[message deleted]");
         assertThat(node.get("attachments").size()).isEqualTo(0);

@@ -17,6 +17,8 @@ import tn.steg.backend.common.domain.event.NewPrivateMessageEvent;
 import tn.steg.backend.common.domain.exception.BusinessRuleException;
 import tn.steg.backend.common.domain.exception.ResourceNotFoundException;
 import tn.steg.backend.common.domain.model.UserPrincipal;
+import tn.steg.backend.companion.domain.model.Deliverable;
+import tn.steg.backend.companion.domain.repository.DeliverableRepository;
 import tn.steg.backend.document.domain.model.DocumentType;
 import tn.steg.backend.document.domain.model.FileAsset;
 import tn.steg.backend.document.domain.repository.FileAssetRepository;
@@ -97,6 +99,7 @@ public class MessagingService {
     private final ConversationMemberRepository memberRepository;
     private final MessageRepository messageRepository;
     private final MessageAttachmentRepository attachmentRepository;
+    private final DeliverableRepository deliverableRepository;
     private final InternshipRepository internshipRepository;
     private final CandidateRepository candidateRepository;
     private final EmployeeRepository employeeRepository;
@@ -357,13 +360,7 @@ public class MessagingService {
             attachmentsByMessage = attachmentRepository.findByMessageIdInWithFile(messageIds).stream()
                     .collect(Collectors.groupingBy(
                             a -> a.getMessage().getId(),
-                            Collectors.mapping(
-                                    a -> new MessageResponse.AttachmentResponse(
-                                            a.getId(),
-                                            a.getFile().getId(),
-                                            a.getFile().getOriginalFileName(),
-                                            a.getFile().getMimeType(),
-                                            a.getFile().getSize()),
+                            Collectors.mapping(MessagingService::toAttachmentResponse,
                                     Collectors.toList())));
         }
         return result.map(m -> MessageResponse.from(m,
@@ -443,10 +440,15 @@ public class MessagingService {
 
     @Transactional
     public MessageResponse sendMessageWithAttachment(
-            UUID conversationId, String content, MultipartFile file, UserPrincipal actor) {
+            UUID conversationId, String content, MultipartFile file,
+            UUID sourceDeliverableId, UserPrincipal actor) {
         // Same transaction: BusinessRuleException (runtime) on attachment
         // validation/storage failure rolls back the message row as well,
         // so no orphan SENT message is left behind.
+        if (sourceDeliverableId != null && (file == null || file.isEmpty())) {
+            throw new BusinessRuleException("DELIVERABLE_ATTACHMENT_FILE_REQUIRED",
+                    "Attaching one of the internship's documents requires the file itself.");
+        }
         MessageResponse sent = sendMessage(conversationId, content, actor);
         if (file == null || file.isEmpty()) {
             return sent;
@@ -454,11 +456,48 @@ public class MessagingService {
 
         Message message = messageRepository.findById(sent.id())
                 .orElseThrow(() -> new ResourceNotFoundException("Message not found: " + sent.id()));
+        Deliverable sourceDocument = resolveChatDocument(conversationId, sourceDeliverableId, actor);
         FileAsset asset = storeChatAttachment(file, actor);
-        attachmentRepository.save(new MessageAttachment(message, asset));
+        attachmentRepository.save(new MessageAttachment(message, asset, sourceDocument));
 
         auditService.log("MESSAGE_ATTACHMENT_ADDED", "Message", message.getId(), null, null, actor.getId(), null);
         return MessageResponse.from(message, toAttachmentResponses(message.getId()));
+    }
+
+    /**
+     * T10/SU-VAL-01: resolves the internship document a chat attachment came
+     * from (the student's journal/report picker). The sender must be a
+     * participant of that document's internship (owning intern, its supervisor
+     * or an Admin), and when the conversation is bound to an internship the
+     * document must belong to it. Unknown ids answer 404 like every scoped
+     * resource; null means an ordinary chat file.
+     */
+    private Deliverable resolveChatDocument(UUID conversationId, UUID sourceDeliverableId, UserPrincipal actor) {
+        if (sourceDeliverableId == null) {
+            return null;
+        }
+        Deliverable deliverable = deliverableRepository.findById(sourceDeliverableId)
+                .orElseThrow(() -> new ResourceNotFoundException("Deliverable not found: " + sourceDeliverableId));
+        Internship internship = deliverable.getInternship();
+        if (internship == null) {
+            throw new ResourceNotFoundException("Deliverable has no internship: " + sourceDeliverableId);
+        }
+        boolean participant = actor.hasRole("ADMIN")
+                || (internship.getCandidate() != null && internship.getCandidate().getUser() != null
+                        && internship.getCandidate().getUser().getId().equals(actor.getId()))
+                || (internship.getSupervisorUser() != null
+                        && internship.getSupervisorUser().getId().equals(actor.getId()));
+        if (!participant) {
+            throw new AccessDeniedException("Only a participant of the document's internship may attach it.");
+        }
+        Conversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new ResourceNotFoundException("Conversation not found: " + conversationId));
+        if (conversation.getInternship() != null
+                && !conversation.getInternship().getId().equals(internship.getId())) {
+            throw new BusinessRuleException("DELIVERABLE_NOT_IN_CONVERSATION",
+                    "This document belongs to another internship.");
+        }
+        return deliverable;
     }
 
     @Transactional
@@ -811,13 +850,26 @@ public class MessagingService {
 
     private List<MessageResponse.AttachmentResponse> toAttachmentResponses(UUID messageId) {
         return attachmentRepository.findByMessageId(messageId).stream()
-                .map(a -> new MessageResponse.AttachmentResponse(
-                        a.getId(),
-                        a.getFile().getId(),
-                        a.getFile().getOriginalFileName(),
-                        a.getFile().getMimeType(),
-                        a.getFile().getSize()))
+                .map(MessagingService::toAttachmentResponse)
                 .toList();
+    }
+
+    /**
+     * T10/SU-VAL-01: exposes the source document of a chat attachment (set when
+     * the sender picked one of the internship's documents) plus its explicit
+     * kind, so the supervisor's long-press menu knows exactly what it can
+     * register. Null for ordinary chat files.
+     */
+    private static MessageResponse.AttachmentResponse toAttachmentResponse(MessageAttachment a) {
+        var source = a.getSourceDeliverable();
+        return new MessageResponse.AttachmentResponse(
+                a.getId(),
+                a.getFile().getId(),
+                a.getFile().getOriginalFileName(),
+                a.getFile().getMimeType(),
+                a.getFile().getSize(),
+                source != null ? source.getId() : null,
+                source != null && source.getDocumentKind() != null ? source.getDocumentKind().name() : null);
     }
 
     /**

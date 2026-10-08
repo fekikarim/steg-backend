@@ -138,8 +138,9 @@ public class ConversationController {
             @PathVariable UUID conversationId,
             @RequestParam("content") String content,
             @RequestParam(value = "file", required = false) MultipartFile file,
+            @RequestParam(value = "deliverableId", required = false) UUID deliverableId,
             @AuthenticationPrincipal UserPrincipal actor) {
-        MessageResponse saved = messagingService.sendMessageWithAttachment(conversationId, content, file, actor);
+        MessageResponse saved = messagingService.sendMessageWithAttachment(conversationId, content, file, deliverableId, actor);
         broadcast(conversationId, saved);
         return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
