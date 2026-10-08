@@ -457,9 +457,8 @@ class ScenarioAAdminSupervisesChainTest {
             assertThat(auditHas(action)).as("audit holds %s", action).isTrue();
         }
         assertThat(auditSourcesOf("CANDIDATE_VALIDATED")).contains(AuditSource.BACK_OFFICE);
-        // Task writes keep the default channel (assumption #20: shared endpoints
-        // cannot be labeled honestly, so BACK_OFFICE) — for intern AND admin alike.
-        assertThat(auditSourcesOf("COMPANION_TASK_STATUS_CHANGED")).contains(AuditSource.BACK_OFFICE);
+        // T15 / BR-55: task status updates by the mobile intern are recorded with MOBILE source.
+        assertThat(auditSourcesOf("COMPANION_TASK_STATUS_CHANGED")).contains(AuditSource.MOBILE);
         assertThat(auditSourcesOf("DELIVERABLE_SUBMITTED")).contains(AuditSource.MOBILE);
         assertThat(auditSourcesOf("AI_VERIFICATION_RUN")).contains(AuditSource.AI);
 
