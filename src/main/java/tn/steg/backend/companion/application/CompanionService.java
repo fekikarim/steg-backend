@@ -305,8 +305,8 @@ public class CompanionService {
         java.util.Map<String, Object> statusAudit = new java.util.LinkedHashMap<>();
         statusAudit.put("status", status);
         statusAudit.put("completedAt", task.getCompletedAt());
-        auditService.log("COMPANION_TASK_STATUS_CHANGED", "Task", taskId, null,
-                statusAudit, actor.getId(), null);
+        audit("COMPANION_TASK_STATUS_CHANGED", "Task", taskId, null,
+                statusAudit, actor);
         publishTaskStatusChanged(task, actor);
         return TaskResponse.from(task);
     }

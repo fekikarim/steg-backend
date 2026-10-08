@@ -174,6 +174,30 @@ class AuditSourceOriginIntegrationTest {
     }
 
     @Test
+    @DisplayName("mobile task status update audits with source MOBILE (BR-55)")
+    void mobileTaskStatusUpdateWritesMobileSource() throws Exception {
+        Fixture f = internshipWithIntern();
+        MvcResult createdTask = mockMvc.perform(post("/api/internships/" + f.internshipId() + "/tasks")
+                        .header("Authorization", "Bearer " + f.internToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Mobile test task\"}"))
+                .andExpect(status().isCreated())
+                .andReturn();
+        UUID taskId = UUID.fromString(objectMapper.readTree(
+                createdTask.getResponse().getContentAsString()).get("id").asText());
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/internships/tasks/" + taskId + "/status")
+                        .param("status", "IN_PROGRESS")
+                        .header("Authorization", "Bearer " + f.internToken()))
+                .andExpect(status().isOk());
+
+        AuditLog statusLog = row("COMPANION_TASK_STATUS_CHANGED", "Task", taskId);
+        assertThat(statusLog.getSource()).isEqualTo(AuditSource.MOBILE);
+        assertThat(statusLog.getActor()).isNotNull();
+        assertThat(statusLog.getActor().getId()).isEqualTo(f.internUserId());
+    }
+
+    @Test
     @DisplayName("front-office-endpoint actions (anonymous intake) audit with source FRONT_OFFICE")
     void frontOfficeEndpointWritesFrontOfficeSource() throws Exception {
         String suffix = uid();
