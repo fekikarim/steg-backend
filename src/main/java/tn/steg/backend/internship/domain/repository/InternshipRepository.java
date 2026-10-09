@@ -31,6 +31,7 @@ public interface InternshipRepository {
     /** S5 candidate queue: one query for the internships (type, supervisor) of a whole page. */
     List<Internship> findByCandidateIdIn(java.util.Collection<UUID> candidateIds);
     List<Internship> findByCandidateUserIdAndStatus(UUID userId, InternshipStatus status);
+    List<Internship> findByCandidateUserId(UUID userId);
     List<Internship> findBySupervisorUserId(UUID supervisorUserId);
     /** Bounded status sweeps (e.g. completed internships awaiting a FINAL report). */
     List<Internship> findByStatus(InternshipStatus status);

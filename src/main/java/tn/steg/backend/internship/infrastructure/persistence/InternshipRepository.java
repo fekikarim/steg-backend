@@ -40,6 +40,13 @@ public interface InternshipRepository extends JpaRepository<Internship, UUID>, t
     @Query("select i from Internship i where i.candidate.user.id = :userId and i.status = :status")
     List<Internship> findByCandidateUserIdAndStatus(@Param("userId") UUID userId, @Param("status") InternshipStatus status);
 
+    @Query("SELECT DISTINCT i FROM Internship i " +
+           "LEFT JOIN FETCH i.candidate c " +
+           "LEFT JOIN FETCH i.application a " +
+           "LEFT JOIN FETCH i.supervisorUser s " +
+           "WHERE c.user.id = :userId ORDER BY i.createdAt DESC")
+    List<Internship> findByCandidateUserId(@Param("userId") UUID userId);
+
     @Query("select i from Internship i where i.supervisorUser.id = :supervisorUserId")
     List<Internship> findBySupervisorUserId(@Param("supervisorUserId") UUID supervisorUserId);
 

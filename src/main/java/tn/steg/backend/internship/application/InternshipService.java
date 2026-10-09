@@ -464,6 +464,31 @@ public class InternshipService {
         return InternshipResponse.from(internship);
     }
 
+    @Transactional
+    public InternshipResponse getMyInternship(UserPrincipal actor) {
+        if (actor == null) {
+            throw new ResourceNotFoundException("No authenticated user");
+        }
+        List<Internship> list = internshipRepository.findByCandidateUserId(actor.getId());
+        if (list.isEmpty()) {
+            throw new ResourceNotFoundException("No internship found for user: " + actor.getId());
+        }
+        Internship selected = list.stream()
+                .filter(i -> i.getStatus() != InternshipStatus.CANCELLED)
+                .findFirst()
+                .orElse(list.get(0));
+
+        if (selected.getSupervisorUser() != null && selected.getCandidate() != null && selected.getCandidate().getUser() != null) {
+            try {
+                messagingService.ensurePrivateThread(selected, selected.getCandidate().getUser(), selected.getSupervisorUser());
+            } catch (Exception e) {
+                log.warn("Could not ensure private thread for internship {}: {}", selected.getId(), e.getMessage());
+            }
+        }
+
+        return InternshipResponse.from(selected);
+    }
+
     @Transactional(readOnly = true)
     public InternshipClassificationResponse getClassification(UUID id) {
         Internship internship = findInternshipOrThrow(id);

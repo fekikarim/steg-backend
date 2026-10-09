@@ -308,6 +308,7 @@ class AdminOnlyEndpointSecurityTest {
             // §3.3 scoped internship reads.
             "GET /api/internships",
             "GET /api/internships/supervised",
+            "GET /api/internships/mine",
             "GET /api/internships/{id}",
             "GET /api/internships/{id}/summary",
             // T14/D14: supervisor self-service notify on own students.

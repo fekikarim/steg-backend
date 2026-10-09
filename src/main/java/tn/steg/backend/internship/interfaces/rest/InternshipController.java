@@ -55,6 +55,14 @@ public class InternshipController {
         return ResponseEntity.ok(supervisedInternshipService.supervisedInternships(principal));
     }
 
+    @PreAuthorize("isAuthenticated()")
+    @GetMapping("/mine")
+    @Operation(summary = "Get current candidate/intern's active or recent internship")
+    public ResponseEntity<InternshipResponse> getMyInternship(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(internshipService.getMyInternship(principal));
+    }
+
     // T13/B13: one-call student home snapshot (same DTOs and service calls
     // as the lists, so numbers cannot drift). Intern-scoped: another
     // student's summary is 403/404, never leaked.

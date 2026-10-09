@@ -144,6 +144,15 @@ class InternshipSummaryTest {
     }
 
     @Test
+    @DisplayName("H1b: the intern resolves their own internship via GET /api/internships/mine")
+    void internResolvesOwnInternshipViaMine() throws Exception {
+        mockMvc.perform(get("/api/internships/mine")
+                        .header("Authorization", "Bearer " + internToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(internshipId.toString()));
+    }
+
+    @Test
     @DisplayName("H2: another intern, the supervisor and anonymous callers are refused")
     void foreignAccessRefused() throws Exception {
         mockMvc.perform(get("/api/internships/" + internshipId + "/summary")
